@@ -53,6 +53,11 @@ dependencies {
 
 tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
 
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
 tasks.named('processGametestResources') {
     from('src/gametest/resources/data/scex_viscriptshop_ae2/structure/empty.nbt') {
         into 'data/scex_viscriptshop_ae2_crash_probe/structure'

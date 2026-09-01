@@ -50,9 +50,11 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 @GameTestHolder("scex_viscriptshop_ae2")
 @PrefixGameTestTemplate(false)
 public final class BridgeGameTests {
-    private static final BlockPos CONNECTOR = new BlockPos(2, 2, 2);
-    private static final BlockPos DRIVE = new BlockPos(3, 2, 2);
-    private static final BlockPos POWER = new BlockPos(4, 2, 2);
+    // Keep every AE fixture one block inside the template boundary. GameTests run in parallel, and
+    // boundary-adjacent AE blocks can otherwise join the neighboring test's grid intermittently.
+    private static final BlockPos CONNECTOR = new BlockPos(1, 2, 1);
+    private static final BlockPos DRIVE = new BlockPos(2, 2, 1);
+    private static final BlockPos POWER = new BlockPos(3, 2, 1);
 
     private BridgeGameTests() {}
 

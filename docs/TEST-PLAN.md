@@ -2,10 +2,13 @@
 
 Target runtime: Java 21, Minecraft 1.21.1, NeoForge 21.1.248, ViScriptShop 1.2.0 and AE2 19.2.17.
 
-Final evidence collected on 2026-09-01:
+Final evidence collected on 2026-09-01 and independently audited on 2026-09-02:
 
-- `gradlew clean build --no-build-cache`: passed;
-- `gradlew runGameTestServer --no-build-cache`: all 12 required tests passed in 1.199 s;
+- two independent `gradlew clean build --no-build-cache` runs passed and produced byte-identical
+  main, sources and GameTest-probe JAR hashes;
+- after isolating every parallel AE fixture from the template boundary, two consecutive
+  `gradlew runGameTestServer --no-build-cache` audit runs passed all 12 required tests in 997.8 ms
+  and 1.054 s, including a normal restart of the same test world;
 - external hard-kill/restart matrix: all four required phase outcomes passed;
 - formal JAR audit: connector classes/assets present and all GameTest/probe classes absent.
 
@@ -15,9 +18,10 @@ Release gates:
    connector, grid, drive and storage cell.
 2. `scripts/run-wal-hard-kill-probe.ps1` must pass all four external process-kill/restart phases.
 3. `gradlew clean build --no-build-cache` must pass.
-4. The formal JAR must contain the connector code/assets and must not contain GameTest,
+4. A second independent clean build must reproduce the exact archive hashes.
+5. The formal JAR must contain the connector code/assets and must not contain GameTest,
    crash-probe, fault-injection or sentinel classes.
-5. Release artifacts must have recorded sizes and SHA-256 hashes.
+6. Release artifacts must have recorded sizes and SHA-256 hashes.
 
 ## GameTest coverage
 
