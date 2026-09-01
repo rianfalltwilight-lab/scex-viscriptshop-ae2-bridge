@@ -12,19 +12,36 @@ java.withSourcesJar()
 
 repositories { mavenCentral() }
 
+sourceSets {
+    gametest {
+        compileClasspath += sourceSets.main.output + configurations.compileClasspath
+        runtimeClasspath += output + compileClasspath + configurations.runtimeClasspath
+    }
+}
+
+configurations {
+    gametestImplementation.extendsFrom implementation
+    gametestRuntimeOnly.extendsFrom runtimeOnly
+}
+
 neoForge {
     version = neoforge_version
     runs {
-        gameTestServer { type = 'gameTestServer' }
+        gameTestServer {
+            type = 'gameTestServer'
+            systemProperty 'neoforge.enabledGameTestNamespaces', 'scex_viscriptshop_ae2'
+        }
         server { server() }
     }
     mods { scex_viscriptshop_ae2 { sourceSet sourceSets.main } }
+    mods.scex_viscriptshop_ae2.sourceSet sourceSets.gametest
 }
 
 dependencies {
     implementation files('vendor/ViScriptShop-neoforge-1.21.1-1.2.0.jar')
     implementation files('vendor/appliedenergistics2-19.2.17.jar')
     implementation files('vendor/ldlib2-neoforge-1.21.1-2.2.37-all.jar')
+    runtimeOnly files('vendor/guideme-21.1.17.jar')
 }
 
 tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
@@ -37,3 +54,10 @@ jar {
             'Built-For-AE2': '19.2.17',
             'Built-For-NeoForge': neoforge_version)
 }
+
+tasks.register('gametestProbeJar', Jar) {
+    archiveClassifier = 'gametest-probe'
+    from sourceSets.gametest.output
+}
+
+tasks.named('build') { dependsOn tasks.named('gametestProbeJar') }
