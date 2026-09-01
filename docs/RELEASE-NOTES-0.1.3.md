@@ -1,3 +1,8 @@
+# WITHDRAWN — DO NOT PUBLISH
+
+This build implemented the wrong fixed-terminal direction and was never deployed. It is retained
+only as historical recovery material for its format-3 journal. Use 0.2.0 or later.
+
 # SCEX ViScriptShop AE2 Bridge 0.1.3
 
 This release candidate replaces the v0.1.2 recovery algorithm with a format-3, globally ordered,

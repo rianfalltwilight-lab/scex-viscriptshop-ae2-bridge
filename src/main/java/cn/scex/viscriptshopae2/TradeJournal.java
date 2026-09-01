@@ -25,7 +25,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
@@ -41,7 +40,7 @@ import net.minecraft.world.level.storage.LevelResource;
 
 /** Durable write-ahead snapshot for one bridged trade. */
 final class TradeJournal {
-    private static final int FORMAT = 3;
+    private static final int FORMAT = 4;
     private static final String DIRECTORY = "scex_viscriptshop_ae2_transactions";
     private static final String SEQUENCE_FILE = "sequence.dat";
     private static final Map<UUID, Path> APPLIED_THIS_PROCESS = new ConcurrentHashMap<>();
@@ -57,7 +56,7 @@ final class TradeJournal {
         this.data = data;
     }
 
-    static TradeJournal prepare(ServerPlayer player, String shop, TerminalBinding binding,
+    static TradeJournal prepare(ServerPlayer player, String shop, ConnectorBinding binding,
                                 ShopServerEvent.BuyPre event, MEStorage storage,
                                 List<ItemStack> affectedKeys, List<ItemStack> inventoryBefore,
                                 List<ItemStack> inventoryAfter, Map<AEItemKey, Long> networkDeltas) {
@@ -71,8 +70,7 @@ final class TradeJournal {
         root.putUUID("player", player.getUUID());
         root.putString("shop", shop);
         root.putString("dimension", binding.dimension().location().toString());
-        root.putLong("terminal", binding.pos().asLong());
-        root.putString("side", binding.side().getName());
+        root.putLong("connector", binding.pos().asLong());
         root.putInt("money", ViScriptShopServerUtil.getMoney(player));
         root.putInt("postMoney", Math.addExact(Math.subtractExact(ViScriptShopServerUtil.getMoney(player),
                 event.getCostSummary().getTotalMoney()), event.getGainSummary().getTotalMoney()));
@@ -304,7 +302,11 @@ final class TradeJournal {
             UUID playerId = root.getUUID("player");
             boolean committed = root.getString("state").equals("COMMITTED");
             ServerPlayer player = playerResolver.apply(playerId);
-            if (player == null) return false;
+            if (player == null) {
+                ScexViScriptShopAe2.LOGGER.error("Cannot recover WAL sequence={}: player {} is unavailable",
+                        root.getLong("sequence"), playerId);
+                return false;
+            }
             players.put(playerId, player);
             for (CompoundTag entry : compounds(root.getList("slots", Tag.TAG_COMPOUND))) {
                 ItemStack pre = ItemStack.parseOptional(server.registryAccess(), entry.getCompound("pre"));
@@ -312,7 +314,7 @@ final class TradeJournal {
                 slots.computeIfAbsent(new SlotKey(playerId, entry.getInt("slot")), ignored -> new StackAccumulator())
                         .add(pre, post, committed ? post : pre);
             }
-            TerminalBinding binding = journal.binding();
+            ConnectorBinding binding = journal.binding();
             for (CompoundTag entry : compounds(root.getList("network", Tag.TAG_COMPOUND))) {
                 AEItemKey key = AEItemKey.of(ItemStack.parseOptional(server.registryAccess(), entry.getCompound("stack")));
                 if (key == null) continue;
@@ -331,11 +333,15 @@ final class TradeJournal {
             experience.computeIfAbsent(playerId, ignored -> new XpAccumulator()).add(root, committed);
         }
 
-        Map<TerminalBinding, MEStorage> storages = new LinkedHashMap<>();
+        Map<ConnectorBinding, MEStorage> storages = new LinkedHashMap<>();
         for (NetworkKey key : network.keySet()) {
             var resolved = key.binding().resolve(server);
-            if (resolved.isEmpty()) return false;
-            storages.putIfAbsent(key.binding(), resolved.get().terminal().getInventory());
+            if (resolved.isEmpty()) {
+                ScexViScriptShopAe2.LOGGER.error("Cannot recover WAL: ME shop connector is unavailable binding={}",
+                        key.binding() + " reason=" + key.binding().unavailableReason(server));
+                return false;
+            }
+            storages.putIfAbsent(key.binding(), resolved.get().storage());
         }
         IActionSource source = IActionSource.empty();
         for (var entry : network.entrySet()) {
@@ -437,11 +443,10 @@ final class TradeJournal {
         }
     }
 
-    private TerminalBinding binding() {
+    private ConnectorBinding binding() {
         ResourceKey<Level> dimension = ResourceKey.create(net.minecraft.core.registries.Registries.DIMENSION,
                 ResourceLocation.parse(data.getString("dimension")));
-        return new TerminalBinding(data.getString("shop"), dimension, BlockPos.of(data.getLong("terminal")),
-                Direction.byName(data.getString("side")));
+        return new ConnectorBinding(data.getUUID("player"), dimension, BlockPos.of(data.getLong("connector")));
     }
 
     private void persist() {
@@ -547,7 +552,7 @@ final class TradeJournal {
         validateCompoundList(root, "slots");
         validateCompoundList(root, "network");
         validateCompoundList(root, "stocks");
-        if (!root.contains("terminal", Tag.TAG_LONG) || !root.contains("createdTick", Tag.TAG_LONG)
+        if (!root.contains("connector", Tag.TAG_LONG) || !root.contains("createdTick", Tag.TAG_LONG)
                 || !root.contains("money", Tag.TAG_INT) || !root.contains("postMoney", Tag.TAG_INT)
                 || !root.contains("xpTotal", Tag.TAG_INT) || !root.contains("xpLevel", Tag.TAG_INT)
                 || !root.contains("xpProgress", Tag.TAG_FLOAT) || !root.contains("postXpTotal", Tag.TAG_INT)) {
@@ -558,7 +563,6 @@ final class TradeJournal {
                 || !Float.isFinite(root.getFloat("xpProgress")) || root.getFloat("xpProgress") < 0
                 || root.getFloat("xpProgress") >= 1) throw new IOException("Invalid XP snapshot");
         ResourceLocation.parse(root.getString("dimension"));
-        if (Direction.byName(root.getString("side")) == null) throw new IOException("Invalid terminal side");
         Set<Integer> slotKeys = new HashSet<>();
         for (CompoundTag entry : compounds(root.getList("slots", Tag.TAG_COMPOUND))) {
             int slot = entry.getInt("slot");
@@ -663,7 +667,7 @@ final class TradeJournal {
     }
 
     private record SlotKey(UUID player, int slot) {}
-    private record NetworkKey(TerminalBinding binding, AEItemKey key) {}
+    private record NetworkKey(ConnectorBinding binding, AEItemKey key) {}
     private record StockKey(String shop, String owner, String category, String merchant) {}
     private record XpState(int total, int level, float progress) {}
 

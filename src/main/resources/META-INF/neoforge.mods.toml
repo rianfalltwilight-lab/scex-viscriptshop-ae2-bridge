@@ -7,7 +7,7 @@ modId="scex_viscriptshop_ae2"
 version="${file.jarVersion}"
 displayName="SCEX ViScriptShop AE2 Bridge"
 authors="SCEX"
-description='''Atomic server-authoritative ViScriptShop transactions backed by an explicitly bound AE2 ME terminal.'''
+description='''Atomic ViScriptShop item transactions using the player's linked AE2 ME network.'''
 
 [[mixins]]
 config="scex_viscriptshop_ae2.mixins.json"

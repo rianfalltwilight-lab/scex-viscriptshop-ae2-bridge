@@ -35,7 +35,7 @@ final class JournalProbeAccessor {
         try {
             Class<?> journal = Class.forName(CLASS);
             Method prepare = journal.getDeclaredMethod("prepare", ServerPlayer.class, String.class,
-                    Class.forName("cn.scex.viscriptshopae2.TerminalBinding"), ShopServerEvent.BuyPre.class,
+                    Class.forName("cn.scex.viscriptshopae2.ConnectorBinding"), ShopServerEvent.BuyPre.class,
                     MEStorage.class, List.class, List.class, List.class, Map.class);
             prepare.setAccessible(true);
             List<ItemStack> before = new java.util.ArrayList<>();
@@ -44,7 +44,7 @@ final class JournalProbeAccessor {
                 before.add(player.getInventory().getItem(slot).copy());
                 after.add(player.getInventory().getItem(slot).copy());
             }
-            int payment = 2;
+            int payment = 1;
             for (int slot = 0; slot < after.size() && payment > 0; slot++) {
                 ItemStack stack = after.get(slot);
                 if (!stack.is(Items.IRON_INGOT)) continue;
@@ -53,28 +53,9 @@ final class JournalProbeAccessor {
                 payment -= debit;
             }
             if (payment != 0) throw new AssertionError("Prepared fixture has insufficient iron payment");
-            boolean stacked = false;
-            for (int slot = 0; slot < player.getInventory().items.size(); slot++) {
-                ItemStack stack = after.get(slot);
-                if (stack.is(Items.DIAMOND) && stack.getCount() < stack.getMaxStackSize()) {
-                    stack.grow(1);
-                    stacked = true;
-                    break;
-                }
-            }
-            if (!stacked) {
-                for (int slot = 0; slot < player.getInventory().items.size(); slot++) {
-                    if (after.get(slot).isEmpty()) {
-                        after.set(slot, new ItemStack(Items.DIAMOND));
-                        stacked = true;
-                        break;
-                    }
-                }
-            }
-            if (!stacked) throw new AssertionError("Prepared fixture has no room for diamond goods");
             Map<AEItemKey, Long> deltas = new java.util.LinkedHashMap<>();
-            deltas.put(AEItemKey.of(Items.DIAMOND), -1L);
-            deltas.put(AEItemKey.of(Items.IRON_INGOT), 2L);
+            deltas.put(AEItemKey.of(Items.IRON_INGOT), -1L);
+            deltas.put(AEItemKey.of(Items.DIAMOND), 1L);
             prepare.invoke(null, player, shop, binding, event, storage, keys, before, after, deltas);
         } catch (ReflectiveOperationException failure) {
             throw new AssertionError("Cannot prepare durable journal", failure);

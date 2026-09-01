@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('goods_extracted', 'inventory_applied', 'partial_payment_insert', 'committed')]
-    [string[]] $Phase = @('goods_extracted', 'inventory_applied', 'partial_payment_insert', 'committed'),
+    [ValidateSet('payment_extracted', 'inventory_applied', 'goods_inserted', 'committed')]
+    [string[]] $Phase = @('payment_extracted', 'inventory_applied', 'goods_inserted', 'committed'),
     [int] $TimeoutSeconds = 150
 )
 
@@ -89,8 +89,15 @@ foreach ($currentPhase in $Phase) {
         Stop-WalProcessTree $verifyProcess.Id
         throw "Phase $currentPhase verification server did not exit"
     }
-    if ($verifyProcess.ExitCode -ne 0) {
-        throw "Phase $currentPhase verification failed with exit code $($verifyProcess.ExitCode)"
+    $verifyProcess.WaitForExit()
+    $verifyProcess.Refresh()
+    $verifyExitCode = $verifyProcess.ExitCode
+    if (-not [string]::IsNullOrWhiteSpace([string] $verifyExitCode) -and [int] $verifyExitCode -ne 0) {
+        throw "Phase $currentPhase verification failed with exit code $verifyExitCode"
+    }
+    $verifyLog = Get-Content -LiteralPath (Join-Path $phasePath 'verify.stdout.log') -Raw
+    if ($verifyLog -notmatch 'BUILD SUCCESSFUL') {
+        throw "Phase $currentPhase verification process exited without a successful Gradle result"
     }
 
     if (Test-Path -LiteralPath $walPath) {
@@ -99,7 +106,7 @@ foreach ($currentPhase in $Phase) {
         if (-not $resolvedWal.StartsWith($resolvedWorld + [IO.Path]::DirectorySeparatorChar)) {
             throw 'Resolved WAL path escaped the test world'
         }
-        $archivePath = Join-Path $phasePath 'transactions-after-verify'
+        $archivePath = Join-Path $phasePath 'transactions-after-verify-format4-final'
         if (Test-Path -LiteralPath $archivePath) {
             throw "Archive already exists: $archivePath"
         }

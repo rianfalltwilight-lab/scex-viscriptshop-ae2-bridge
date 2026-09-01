@@ -1,23 +1,29 @@
-# Configuration and behavior
+# Connector behavior
 
-The server config is generated as `serverconfig/scex_viscriptshop_ae2-server.toml` for a world.
+There is no server-side shop-to-terminal coordinate configuration in 0.2.0. A player crafts the
+`ME Shop Connector`, places it as part of their own powered AE2 network, and the placement becomes
+that player's active shop link. Placing another connector replaces the previous link. The link is
+stored in world data and survives restarts.
 
-Each binding has the exact form:
+The connector must be loaded, online, powered, have an AE channel, and retain the placing player's
+AE2 node ownership. It does not open a separate shop screen and is not assigned to a shop ID: it
+extends every native ViScriptShop item trade used by that player.
 
-```toml
-bindings = ["main|minecraft:overworld|10|64|20|north"]
-requireTerminalOwner = true
-```
+While the connector is available:
 
-The position must contain an AE2 multipart host and the selected side must contain a live part implementing AE2's public `ITerminalHost`. Unbound shops continue to use normal ViScriptShop behavior. A bound shop fails closed if its chunk is unloaded, terminal is missing/offline, world interaction is denied, or ownership fails.
+- native shop item counts combine matching items in the player's backpack and linked ME storage;
+- item prices are taken from ME first, then from the backpack for any remainder;
+- purchased item rewards are inserted directly into the linked ME network;
+- the complete reward insertion is simulated before any payment is debited, so a full ME network
+  rejects the whole transaction without consuming payment;
+- ViScriptShop money, experience, stage rules, stock, success/failure events and commands retain
+  their native meaning;
+- commands run only after the item/money/XP/stock transaction is durably committed.
 
-For a bound trade:
+If the player has no connector, or the saved connector is missing/offline/unloaded, the bridge does
+not intercept the purchase. ViScriptShop then performs its normal backpack-only transaction. No
+nearby-grid scan, cross-dimensional search, operator coordinate or global shared shop inventory is
+used.
 
-- item payment is inserted into that terminal's ME grid;
-- item merchandise is extracted from the same grid;
-- ViScriptShop money, experience, commands, stage flags, and configured stock keep their upstream meaning;
-- all ME availability and insertion capacity is simulated before commit;
-- the grid object is locked for the commit, and changed inventory causes compensation rollback;
-- no automatic nearby-grid lookup or cross-dimensional scan occurs.
-
-The bridge is required on server and players because ViScriptShop itself is a both-sides mod and the required Mixin must be identical. It adds no client UI assets beyond messages.
+The mod is required on both the server and clients because it adds a block/item and patches the
+native ViScriptShop item-count RPC.

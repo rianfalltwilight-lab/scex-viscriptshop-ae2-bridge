@@ -2,14 +2,15 @@ package cn.scex.viscriptshopae2.gametest;
 
 import appeng.api.config.Actionable;
 import appeng.api.networking.security.IActionSource;
-import appeng.api.parts.PartHelper;
 import appeng.api.stacks.AEItemKey;
+import appeng.api.stacks.AEKey;
+import appeng.api.stacks.KeyCounter;
+import appeng.api.storage.MEStorage;
 import appeng.blockentity.storage.DriveBlockEntity;
 import appeng.core.definitions.AEBlocks;
 import appeng.core.definitions.AEItems;
-import appeng.core.definitions.AEParts;
-import appeng.parts.reporting.ItemTerminalPart;
-import appeng.api.util.AEColor;
+import cn.scex.viscriptshopae2.MeShopConnectorBlockEntity;
+import cn.scex.viscriptshopae2.ModContent;
 import com.lowdragmc.lowdraglib2.syncdata.rpc.RPCSender;
 import com.mojang.authlib.GameProfile;
 import com.viscriptshop.ViscriptShop;
@@ -31,6 +32,7 @@ import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -43,7 +45,7 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 @GameTestHolder("scex_viscriptshop_ae2_crash_probe")
 @PrefixGameTestTemplate(false)
 public final class CrashRecoveryGameTests {
-    private static final BlockPos TERMINAL = new BlockPos(2, 2, 2);
+    private static final BlockPos CONNECTOR = new BlockPos(2, 2, 2);
     private static final BlockPos DRIVE = new BlockPos(3, 2, 2);
     private static final BlockPos POWER = new BlockPos(4, 2, 2);
     private CrashRecoveryGameTests() {}
@@ -61,39 +63,44 @@ public final class CrashRecoveryGameTests {
             return;
         }
         if (!verifyPhase.isEmpty()) {
-            helper.runAfterDelay(40, () -> verifyRestart(helper, verifyPhase));
+            CompoundTag journal = JournalProbeAccessor.latestJournal(helper.getLevel().getServer()).data();
+            BlockPos connectorPos = BlockPos.of(journal.getLong("connector"));
+            setFixtureForced(helper, connectorPos, true);
+            helper.getLevel().getChunkAt(connectorPos);
+            helper.getLevel().getChunkAt(connectorPos.relative(Direction.EAST, 2));
+            helper.runAfterDelay(80, () -> verifyRestart(helper, verifyPhase));
             return;
         }
         helper.succeed();
     }
 
     private static void createKillBoundary(CrashRig rig, String phase) {
-        if (!List.of("goods_extracted", "inventory_applied", "partial_payment_insert", "committed")
+        if (!List.of("payment_extracted", "inventory_applied", "goods_inserted", "committed")
                 .contains(phase)) throw new AssertionError("Unknown hard-kill phase " + phase);
         IActionSource source = IActionSource.ofPlayer(rig.player());
         AEItemKey diamond = AEItemKey.of(Items.DIAMOND);
         AEItemKey iron = AEItemKey.of(Items.IRON_INGOT);
-        if (rig.storage().insert(diamond, 1, Actionable.MODULATE, source) != 1) {
-            throw new AssertionError("Crash probe could not seed one ME diamond");
+        if (rig.storage().insert(iron, 1, Actionable.MODULATE, source) != 1) {
+            throw new AssertionError("Crash probe could not seed one ME iron payment");
         }
-        rig.player().getInventory().add(new ItemStack(Items.IRON_INGOT, 2));
+        rig.player().getInventory().add(new ItemStack(Items.IRON_INGOT));
         rig.player().server.saveEverything(true, true, true);
-        if (rig.storage().extract(diamond, 1, Actionable.SIMULATE, source) != 1) {
-            throw new AssertionError("Crash probe baseline save lost the ME diamond");
+        if (rig.storage().extract(iron, 1, Actionable.SIMULATE, source) != 1) {
+            throw new AssertionError("Crash probe baseline save lost the ME iron payment");
         }
 
         if (phase.equals("committed")) {
             invokeAuthoritativeBuy(rig.player(), rig.shop());
         } else {
-            var binding = cn.scex.viscriptshopae2.TerminalBinding.find(rig.shop()).orElseThrow();
+            var binding = cn.scex.viscriptshopae2.ConnectorBinding.find(rig.player()).orElseThrow();
             JournalProbeAccessor.prepare(rig.player(), rig.shop(), binding, makeEvent(rig), rig.storage(),
                     List.of(new ItemStack(Items.DIAMOND), new ItemStack(Items.IRON_INGOT)));
-            rig.storage().extract(diamond, 1, Actionable.MODULATE, source);
-            if (!phase.equals("goods_extracted")) {
+            rig.storage().extract(iron, 1, Actionable.MODULATE, source);
+            if (!phase.equals("payment_extracted")) {
                 JournalProbeAccessor.applyLatestPostInventory(rig.player().server, rig.player(), rig.shop());
             }
-            if (phase.equals("partial_payment_insert")) {
-                rig.storage().insert(iron, 1, Actionable.MODULATE, source);
+            if (phase.equals("goods_inserted")) {
+                rig.storage().insert(diamond, 1, Actionable.MODULATE, source);
             }
         }
         JournalProbeAccessor.writeProbeSentinel(rig.player().server, "scex.walSentinel", phase,
@@ -106,15 +113,16 @@ public final class CrashRecoveryGameTests {
         CompoundTag journal = probe.data();
         helper.assertTrue(journal.getString("shop").equals("hard-kill-" + phase),
                 "restart must inspect the journal from the requested kill phase");
-        BridgeConfigAccessor.setBinding(journal);
-        BlockPos terminalPos = BlockPos.of(journal.getLong("terminal"));
-        helper.getLevel().getChunkAt(terminalPos);
+        ConnectorLinkAccessor.setBinding(helper.getLevel().getServer(), journal);
+        BlockPos connectorPos = BlockPos.of(journal.getLong("connector"));
+        helper.getLevel().getChunkAt(connectorPos);
+        helper.getLevel().getChunkAt(connectorPos.relative(Direction.EAST, 2));
 
         UUID playerId = journal.getUUID("player");
         ServerPlayer player = FakePlayerFactory.get(helper.getLevel(),
                 new GameProfile(playerId, "scex-hard-kill-" + phase));
         player.setGameMode(GameType.SURVIVAL);
-        BlockPos playerPos = helper.absolutePos(TERMINAL).relative(Direction.NORTH);
+        BlockPos playerPos = helper.absolutePos(CONNECTOR).relative(Direction.NORTH);
         player.setPos(playerPos.getX() + 0.5, playerPos.getY(), playerPos.getZ() + 0.5);
         var slots = journal.getList("slots", Tag.TAG_COMPOUND);
         for (int index = 0; index < slots.size(); index++) {
@@ -133,6 +141,10 @@ public final class CrashRecoveryGameTests {
                     stock.getString("merchant"), stock.getInt("amount"));
         }
         JournalProbeAccessor.registerPlayer(player);
+        var restartBinding = cn.scex.viscriptshopae2.ConnectorBinding.find(player).orElseThrow();
+        helper.assertTrue(restartBinding.resolve(player.server).isPresent(),
+                "restart fixture must resolve the saved online connector before WAL replay: "
+                        + restartBinding.unavailableReason(player.server));
 
         ItemStack slotBefore = player.getInventory().getItem(slots.getCompound(0).getInt("slot")).copy();
         boolean recovered = JournalProbeAccessor.simulateNewProcessAndTryReplayAll(player.server);
@@ -152,7 +164,15 @@ public final class CrashRecoveryGameTests {
         }
         JournalProbeAccessor.writeProbeSentinel(player.server, "scex.walVerifySentinel", phase,
                 recovered ? "restart_recovered" : "restart_failed_closed_as_required");
+        setFixtureForced(helper, connectorPos, false);
         helper.succeed();
+    }
+
+    private static void setFixtureForced(GameTestHelper helper, BlockPos connectorPos, boolean forced) {
+        var first = new net.minecraft.world.level.ChunkPos(connectorPos);
+        var last = new net.minecraft.world.level.ChunkPos(connectorPos.relative(Direction.EAST, 2));
+        helper.getLevel().setChunkForced(first.x, first.z, forced);
+        helper.getLevel().setChunkForced(last.x, last.z, forced);
     }
 
     private static CrashRig setupRig(GameTestHelper helper, String phase) {
@@ -165,13 +185,12 @@ public final class CrashRecoveryGameTests {
         helper.setBlock(DRIVE, AEBlocks.DRIVE.block());
         DriveBlockEntity drive = (DriveBlockEntity) helper.getBlockEntity(DRIVE);
         drive.getInternalInventory().setItemDirect(0, AEItems.ITEM_CELL_64K.stack());
-        var host = PartHelper.getOrPlacePartHost(helper.getLevel(), helper.absolutePos(TERMINAL), true, player);
-        if (host == null) throw new AssertionError("Crash probe multipart host missing");
-        host.addPart((appeng.api.parts.IPartItem<?>) AEParts.GLASS_CABLE.item(AEColor.TRANSPARENT), null, player);
-        ItemTerminalPart terminal = PartHelper.setPart(helper.getLevel(), helper.absolutePos(TERMINAL), Direction.NORTH,
-                player, AEParts.TERMINAL.get());
-        if (terminal == null) throw new AssertionError("Crash probe terminal missing");
-        BridgeConfigAccessor.setBinding(shop, helper.absolutePos(TERMINAL));
+        helper.setBlock(CONNECTOR, ModContent.ME_SHOP_CONNECTOR.get());
+        MeShopConnectorBlockEntity connector = (MeShopConnectorBlockEntity) helper.getBlockEntity(CONNECTOR);
+        BlockPos connectorPos = helper.absolutePos(CONNECTOR);
+        ModContent.ME_SHOP_CONNECTOR.get().setPlacedBy(helper.getLevel(), connectorPos,
+                helper.getLevel().getBlockState(connectorPos), player,
+                new ItemStack(ModContent.ME_SHOP_CONNECTOR_ITEM.get()));
 
         MerchantInfo merchant = new MerchantInfo();
         merchant.setId("diamond");
@@ -188,7 +207,7 @@ public final class CrashRecoveryGameTests {
         if (ViscriptShop.getShopSavedData() == null) ViscriptShop.setShopSavedData(new ShopSavedData());
         ViScriptShopServerUtil.setShopInfo(shop, info);
         JournalProbeAccessor.registerPlayer(player);
-        return new CrashRig(player, shop, merchant, info, terminal.getInventory());
+        return new CrashRig(player, shop, merchant, info, new LazyStorage(connector));
     }
 
     private static ShopServerEvent.BuyPre makeEvent(CrashRig rig) {
@@ -209,4 +228,22 @@ public final class CrashRecoveryGameTests {
 
     private record CrashRig(ServerPlayer player, String shop, MerchantInfo merchant, ShopInfo info,
                             appeng.api.storage.MEStorage storage) {}
+
+    private static final class LazyStorage implements MEStorage {
+        private final MeShopConnectorBlockEntity connector;
+        private LazyStorage(MeShopConnectorBlockEntity connector) { this.connector = connector; }
+        private MEStorage delegate() {
+            var grid = connector.getMainNode().getGrid();
+            if (grid == null) throw new IllegalStateException("crash connector grid unavailable");
+            return grid.getStorageService().getInventory();
+        }
+        @Override public long insert(AEKey key, long amount, Actionable mode, IActionSource source) {
+            return delegate().insert(key, amount, mode, source);
+        }
+        @Override public long extract(AEKey key, long amount, Actionable mode, IActionSource source) {
+            return delegate().extract(key, amount, mode, source);
+        }
+        @Override public void getAvailableStacks(KeyCounter out) { delegate().getAvailableStacks(out); }
+        @Override public Component getDescription() { return delegate().getDescription(); }
+    }
 }

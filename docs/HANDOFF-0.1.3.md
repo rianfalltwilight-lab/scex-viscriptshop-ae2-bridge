@@ -1,3 +1,8 @@
+# WITHDRAWN — DO NOT PUBLISH
+
+This handoff is superseded. The build used the wrong fixed-terminal design and was never deployed.
+It is retained only for historical format-3 recovery reference.
+
 # SCEX ViScriptShop AE2 Bridge 0.1.3 handoff
 
 ## Deployable artifact

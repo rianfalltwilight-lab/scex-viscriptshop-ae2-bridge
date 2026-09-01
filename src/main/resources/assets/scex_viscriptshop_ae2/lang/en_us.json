@@ -1,9 +1,11 @@
 {
-  "scex_viscriptshop_ae2.error.unbound": "This shop is not bound to an ME terminal",
-  "scex_viscriptshop_ae2.error.offline": "The bound ME terminal is offline or missing",
+  "block.scex_viscriptshop_ae2.me_shop_connector": "ME Shop Connector",
+  "scex_viscriptshop_ae2.connector.bound": "This ME Shop Connector is now linked to you",
+  "scex_viscriptshop_ae2.connector.online": "The ME Shop Connector is online and available to native shops",
+  "scex_viscriptshop_ae2.connector.offline": "The ME Shop Connector is not connected to an available ME network",
   "scex_viscriptshop_ae2.error.permission": "You may not trade through this ME network",
-  "scex_viscriptshop_ae2.error.stock": "The ME warehouse does not have enough stock",
-  "scex_viscriptshop_ae2.error.capacity": "The ME warehouse cannot accept the payment items",
+  "scex_viscriptshop_ae2.error.offline": "The ME network changed state; the trade was not performed",
+  "scex_viscriptshop_ae2.error.capacity": "The ME network cannot accept all purchased items",
   "scex_viscriptshop_ae2.error.rollback": "The transaction failed and was rolled back; contact an administrator",
-  "scex_viscriptshop_ae2.success": "ME warehouse transaction completed"
+  "scex_viscriptshop_ae2.success": "ME shop transaction completed"
 }

@@ -1,0 +1,21 @@
+{
+  "type": "minecraft:block",
+  "pools": [
+    {
+      "bonus_rolls": 0.0,
+      "conditions": [
+        {
+          "condition": "minecraft:survives_explosion"
+        }
+      ],
+      "entries": [
+        {
+          "type": "minecraft:item",
+          "name": "scex_viscriptshop_ae2:me_shop_connector"
+        }
+      ],
+      "rolls": 1.0
+    }
+  ],
+  "random_sequence": "scex_viscriptshop_ae2:blocks/me_shop_connector"
+}

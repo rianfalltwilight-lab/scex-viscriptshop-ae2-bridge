@@ -1,0 +1,24 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "c": {
+      "item": "ae2:fluix_crystal"
+    },
+    "e": {
+      "item": "minecraft:emerald"
+    },
+    "i": {
+      "item": "ae2:interface"
+    }
+  },
+  "pattern": [
+    "cec",
+    "eie",
+    "cec"
+  ],
+  "result": {
+    "count": 1,
+    "id": "scex_viscriptshop_ae2:me_shop_connector"
+  }
+}
