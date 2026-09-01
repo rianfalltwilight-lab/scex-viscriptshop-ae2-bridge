@@ -1,0 +1,9 @@
+{
+  "scex_viscriptshop_ae2.error.unbound": "This shop is not bound to an ME terminal",
+  "scex_viscriptshop_ae2.error.offline": "The bound ME terminal is offline or missing",
+  "scex_viscriptshop_ae2.error.permission": "You may not trade through this ME network",
+  "scex_viscriptshop_ae2.error.stock": "The ME warehouse does not have enough stock",
+  "scex_viscriptshop_ae2.error.capacity": "The ME warehouse cannot accept the payment items",
+  "scex_viscriptshop_ae2.error.rollback": "The transaction failed and was rolled back; contact an administrator",
+  "scex_viscriptshop_ae2.success": "ME warehouse transaction completed"
+}

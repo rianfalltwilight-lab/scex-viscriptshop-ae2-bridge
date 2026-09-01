@@ -1,0 +1,39 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.116'
+}
+
+version = mod_version
+group = 'cn.scex.compat'
+
+base { archivesName = 'scex-viscriptshop-ae2-bridge-neoforge-1.21.1' }
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+java.withSourcesJar()
+
+repositories { mavenCentral() }
+
+neoForge {
+    version = neoforge_version
+    runs {
+        gameTestServer { type = 'gameTestServer' }
+        server { server() }
+    }
+    mods { scex_viscriptshop_ae2 { sourceSet sourceSets.main } }
+}
+
+dependencies {
+    implementation files('vendor/ViScriptShop-neoforge-1.21.1-1.2.0.jar')
+    implementation files('vendor/appliedenergistics2-19.2.17.jar')
+    implementation files('vendor/ldlib2-neoforge-1.21.1-2.2.37-all.jar')
+}
+
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+
+jar {
+    manifest.attributes(
+            'Implementation-Title': 'SCEX ViScriptShop AE2 Bridge',
+            'Implementation-Version': project.version,
+            'Built-For-ViScriptShop': '1.2.0',
+            'Built-For-AE2': '19.2.17',
+            'Built-For-NeoForge': neoforge_version)
+}

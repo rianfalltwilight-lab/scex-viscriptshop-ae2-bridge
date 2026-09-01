@@ -1,0 +1,9 @@
+{
+  "scex_viscriptshop_ae2.error.unbound": "该商店未绑定 ME 终端",
+  "scex_viscriptshop_ae2.error.offline": "绑定的 ME 终端离线或已移除",
+  "scex_viscriptshop_ae2.error.permission": "你无权使用该 ME 网络交易",
+  "scex_viscriptshop_ae2.error.stock": "ME 仓库商品库存不足",
+  "scex_viscriptshop_ae2.error.capacity": "ME 仓库没有足够容量接收付款物品",
+  "scex_viscriptshop_ae2.error.rollback": "交易失败并已回滚；请联系管理员检查日志",
+  "scex_viscriptshop_ae2.success": "ME 仓库交易成功"
+}
