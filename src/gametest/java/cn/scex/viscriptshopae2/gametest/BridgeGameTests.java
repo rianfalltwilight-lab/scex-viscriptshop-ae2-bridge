@@ -4,6 +4,8 @@ import appeng.api.config.Actionable;
 import appeng.api.networking.security.IActionSource;
 import appeng.api.parts.PartHelper;
 import appeng.api.stacks.AEItemKey;
+import appeng.api.stacks.AEKey;
+import appeng.api.stacks.KeyCounter;
 import appeng.api.util.AEColor;
 import appeng.blockentity.storage.DriveBlockEntity;
 import appeng.core.definitions.AEBlocks;
@@ -24,6 +26,9 @@ import com.viscriptshop.util.ViScriptShopServerUtil;
 import java.util.List;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collections;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
@@ -124,7 +129,7 @@ public final class BridgeGameTests {
             IActionSource source = IActionSource.ofPlayer(rig.player());
             rig.storage().insert(AEItemKey.of(Items.DIAMOND), 1, Actionable.MODULATE, source);
             rig.player().getInventory().add(new ItemStack(Items.IRON_INGOT, 2));
-            TransactionProbeAccessor.beforeCommit(rig.shop(), () -> helper.setBlock(DRIVE, Blocks.AIR));
+            helper.setBlock(DRIVE, Blocks.AIR);
             Counters counters = invokeCounted(rig.player(), rig.shop());
             helper.assertTrue(count(rig.player(), Items.IRON_INGOT) == 2, "disconnect preserves payment");
             helper.assertTrue(count(rig.player(), Items.DIAMOND) == 0, "disconnect grants no goods");
@@ -186,6 +191,163 @@ public final class BridgeGameTests {
         });
     }
 
+    @GameTest(template = "empty", timeoutTicks = 160)
+    public static void rollbackAfterGoodsWereExtracted(GameTestHelper helper) {
+        runInjectedRollback(helper, "after-goods", FaultPoint.AFTER_GOODS_EXTRACT);
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 160)
+    public static void rollbackAfterPlayerWasDebited(GameTestHelper helper) {
+        runInjectedRollback(helper, "after-debit", FaultPoint.BEFORE_PAYMENT_INSERT);
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 160)
+    public static void rollbackAfterPartialPaymentInsert(GameTestHelper helper) {
+        runInjectedRollback(helper, "partial-insert", FaultPoint.AFTER_PARTIAL_PAYMENT_INSERT);
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 160)
+    public static void preparedJournalReloadRollsBack(GameTestHelper helper) {
+        TestRig rig = setupRig(helper, "reload-prepared", 1);
+        helper.runAfterDelay(30, () -> {
+            IActionSource source = IActionSource.ofPlayer(rig.player());
+            AEItemKey diamond = AEItemKey.of(Items.DIAMOND);
+            AEItemKey iron = AEItemKey.of(Items.IRON_INGOT);
+            rig.storage().insert(diamond, 1, Actionable.MODULATE, source);
+            rig.player().getInventory().add(new ItemStack(Items.IRON_INGOT, 2));
+            var binding = cn.scex.viscriptshopae2.TerminalBinding.find(rig.shop()).orElseThrow();
+            JournalProbeAccessor.prepare(rig.player(), rig.shop(), binding, makeEvent(rig), rig.storage(),
+                    List.of(new ItemStack(Items.DIAMOND), new ItemStack(Items.IRON_INGOT)));
+            helper.assertTrue(JournalProbeAccessor.journalCount(rig.player().server) > 0,
+                    "PREPARED journal must be durable before mutation");
+
+            rig.storage().extract(diamond, 1, Actionable.MODULATE, source);
+            rig.player().getInventory().getItem(0).shrink(2);
+            rig.storage().insert(iron, 1, Actionable.MODULATE, source);
+            ViScriptShopServerUtil.setMoney(rig.player(), 17);
+            rig.player().giveExperiencePoints(9);
+            ViScriptShopServerUtil.reduceMerchantStock(rig.player(), rig.shop(), "items", rig.merchant(), 1);
+
+            helper.assertTrue(JournalProbeAccessor.replayFromDisk(rig.player().server, rig.player(), rig.shop()),
+                    "reloaded PREPARED journal must replay");
+            helper.assertTrue(count(rig.player(), Items.IRON_INGOT) == 2 && count(rig.player(), Items.DIAMOND) == 0,
+                    "PREPARED replay restores full player snapshot");
+            helper.assertTrue(rig.storage().extract(diamond, 1, Actionable.SIMULATE, source) == 1
+                            && rig.storage().extract(iron, 2, Actionable.SIMULATE, source) == 0,
+                    "PREPARED replay restores exact ME pre-state");
+            helper.assertTrue(ViScriptShopServerUtil.getMoney(rig.player()) == 0 && rig.player().totalExperience == 0,
+                    "PREPARED replay restores economy pre-state");
+            helper.assertTrue(ViScriptShopServerUtil.getEffectiveMerchantStock(rig.player(), rig.shop(), "items",
+                    rig.merchant()) == 1, "PREPARED replay restores stock pre-state");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 160)
+    public static void committedJournalReloadCompletesForward(GameTestHelper helper) {
+        TestRig rig = setupRig(helper, "reload-committed", 1);
+        helper.runAfterDelay(30, () -> {
+            IActionSource source = IActionSource.ofPlayer(rig.player());
+            AEItemKey diamond = AEItemKey.of(Items.DIAMOND);
+            AEItemKey iron = AEItemKey.of(Items.IRON_INGOT);
+            rig.storage().insert(diamond, 1, Actionable.MODULATE, source);
+            rig.player().getInventory().add(new ItemStack(Items.IRON_INGOT, 2));
+            Counters committed = invokeCounted(rig.player(), rig.shop());
+            helper.assertTrue(committed.success == 1, "fixture transaction must commit before replay simulation");
+            helper.assertTrue(JournalProbeAccessor.hasJournal(rig.player().server, rig.shop()),
+                    "COMMITTED journal remains until normal checkpoint");
+
+            rig.player().getInventory().clearContent();
+            rig.player().getInventory().add(new ItemStack(Items.IRON_INGOT, 2));
+            rig.storage().extract(iron, 2, Actionable.MODULATE, source);
+            rig.storage().insert(diamond, 1, Actionable.MODULATE, source);
+            rig.player().totalExperience = 0;
+            rig.player().experienceLevel = 0;
+            rig.player().experienceProgress = 0;
+            ViScriptShopServerUtil.setMerchantStock(rig.shop(), "items", "diamond", 1);
+
+            JournalProbeAccessor.simulateNewProcess(rig.player().server, rig.shop());
+            helper.assertTrue(JournalProbeAccessor.replayFromDisk(rig.player().server, rig.player(), rig.shop()),
+                    "reloaded COMMITTED journal must replay forward");
+            helper.assertTrue(count(rig.player(), Items.IRON_INGOT) == 0 && count(rig.player(), Items.DIAMOND) == 1,
+                    "COMMITTED replay restores post inventory");
+            helper.assertTrue(rig.storage().extract(iron, 2, Actionable.SIMULATE, source) == 2
+                            && rig.storage().extract(diamond, 1, Actionable.SIMULATE, source) == 0,
+                    "COMMITTED replay restores exact ME post-state");
+            helper.assertTrue(rig.player().totalExperience == 3, "COMMITTED replay restores post XP");
+            helper.assertTrue(ViScriptShopServerUtil.getEffectiveMerchantStock(rig.player(), rig.shop(), "items",
+                    rig.merchant()) == 0, "COMMITTED replay restores post stock");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 240)
+    public static void walLatencyAndFiftyTradeConservation(GameTestHelper helper) {
+        TestRig rig = setupRig(helper, "wal-benchmark", 50);
+        helper.runAfterDelay(30, () -> {
+            IActionSource source = IActionSource.ofPlayer(rig.player());
+            rig.storage().insert(AEItemKey.of(Items.DIAMOND), 50, Actionable.MODULATE, source);
+            rig.player().getInventory().add(new ItemStack(Items.IRON_INGOT, 64));
+            rig.player().getInventory().add(new ItemStack(Items.IRON_INGOT, 36));
+            List<Long> micros = new ArrayList<>();
+            Counters counters = new Counters();
+            NeoForge.EVENT_BUS.register(counters);
+            try {
+                for (int index = 0; index < 50; index++) {
+                    long started = System.nanoTime();
+                    invokeAuthoritativeBuy(rig.player(), rig.shop());
+                    micros.add((System.nanoTime() - started) / 1_000);
+                }
+            } finally {
+                NeoForge.EVENT_BUS.unregister(counters);
+            }
+            Collections.sort(micros);
+            long p50 = micros.get(24);
+            long p95 = micros.get(47);
+            cn.scex.viscriptshopae2.ScexViScriptShopAe2.LOGGER.info(
+                    "WAL_BENCHMARK transactions=50 p50_us={} p95_us={} max_us={}", p50, p95, micros.getLast());
+            helper.assertTrue(counters.success == 50 && counters.fail == 0, "all benchmark trades must commit");
+            helper.assertTrue(count(rig.player(), Items.IRON_INGOT) == 0 && count(rig.player(), Items.DIAMOND) == 50,
+                    "50 trades conserve player inventory");
+            helper.assertTrue(rig.storage().extract(AEItemKey.of(Items.IRON_INGOT), 100, Actionable.SIMULATE, source) == 100
+                            && rig.storage().extract(AEItemKey.of(Items.DIAMOND), 50, Actionable.SIMULATE, source) == 0,
+                    "50 trades conserve ME inventory");
+            helper.assertTrue(ViScriptShopServerUtil.getEffectiveMerchantStock(rig.player(), rig.shop(), "items",
+                    rig.merchant()) == 0, "50 trades decrement stock exactly");
+            helper.succeed();
+        });
+    }
+
+    private static void runInjectedRollback(GameTestHelper helper, String name, FaultPoint point) {
+        TestRig rig = setupRig(helper, name, 1);
+        helper.runAfterDelay(30, () -> {
+            IActionSource source = IActionSource.ofPlayer(rig.player());
+            rig.storage().insert(AEItemKey.of(Items.DIAMOND), 1, Actionable.MODULATE, source);
+            rig.player().getInventory().add(new ItemStack(Items.IRON_INGOT, 2));
+            int money = ViScriptShopServerUtil.getMoney(rig.player());
+            int xp = rig.player().totalExperience;
+            Counters counters = new Counters();
+            NeoForge.EVENT_BUS.register(counters);
+            try {
+                invokeCore(rig, new FaultStorage(rig.storage(), point));
+            } finally {
+                NeoForge.EVENT_BUS.unregister(counters);
+            }
+            helper.assertTrue(count(rig.player(), Items.IRON_INGOT) == 2, "rollback restores player payment");
+            helper.assertTrue(count(rig.player(), Items.DIAMOND) == 0, "rollback removes granted goods");
+            helper.assertTrue(rig.storage().extract(AEItemKey.of(Items.DIAMOND), 1, Actionable.SIMULATE, source) == 1,
+                    "rollback restores extracted ME goods");
+            helper.assertTrue(rig.storage().extract(AEItemKey.of(Items.IRON_INGOT), 2, Actionable.SIMULATE, source) == 0,
+                    "rollback removes inserted ME payment, including partial insert");
+            helper.assertTrue(ViScriptShopServerUtil.getEffectiveMerchantStock(rig.player(), rig.shop(), "items",
+                    rig.merchant()) == 1, "rollback restores shop stock");
+            helper.assertTrue(ViScriptShopServerUtil.getMoney(rig.player()) == money && rig.player().totalExperience == xp,
+                    "rollback restores money and XP");
+            helper.assertTrue(counters.success == 0 && counters.fail == 1, "rollback emits BuyFail only");
+            helper.succeed();
+        });
+    }
+
     private static TestRig setupRig(GameTestHelper helper, String shop, int stock) {
         shop = shop + "-" + UUID.randomUUID();
         ServerPlayer player = makePlayer(helper, shop);
@@ -218,7 +380,7 @@ public final class BridgeGameTests {
         ShopInfo info = new ShopInfo(); info.getCategoryInfos().add(category);
         if (ViscriptShop.getShopSavedData() == null) ViscriptShop.setShopSavedData(new ShopSavedData());
         ViScriptShopServerUtil.setShopInfo(shop, info);
-        return new TestRig(player, shop, merchant, terminal, terminal.getInventory());
+        return new TestRig(player, shop, merchant, info, terminal, terminal.getInventory());
     }
 
     private static ServerPlayer makePlayer(GameTestHelper helper, String name) {
@@ -257,14 +419,79 @@ public final class BridgeGameTests {
         }
     }
 
+    private static void invokeCore(TestRig rig, appeng.api.storage.MEStorage storage) {
+        ShopServerEvent.BuyPre event = makeEvent(rig);
+        try {
+            Method execute = cn.scex.viscriptshopae2.AtomicTradeHandler.class.getDeclaredMethod("execute",
+                    ServerPlayer.class, String.class, cn.scex.viscriptshopae2.TerminalBinding.class,
+                    ShopServerEvent.BuyPre.class, appeng.api.storage.MEStorage.class);
+            execute.setAccessible(true);
+            var binding = cn.scex.viscriptshopae2.TerminalBinding.find(rig.shop()).orElseThrow();
+            execute.invoke(null, rig.player(), rig.shop(), binding, event, storage);
+        } catch (java.lang.reflect.InvocationTargetException failure) {
+            throw new AssertionError("Core invocation escaped transaction boundary", failure.getCause());
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError("Cannot invoke transaction core", failure);
+        }
+    }
+
+    private static ShopServerEvent.BuyPre makeEvent(TestRig rig) {
+        AggregatedResources cost = new AggregatedResources();
+        cost.addItemEntry(rig.merchant().getItemA(), rig.merchant().getItemA().getCount(),
+                rig.merchant().getItemAMatchRule());
+        AggregatedResources gain = new AggregatedResources();
+        gain.addItem(rig.merchant().getItemResult(), rig.merchant().getItemResult().getCount());
+        gain.setTotalXp(rig.merchant().getXp());
+        gain.getPurchaseEntries().add(new AggregatedResources.PurchaseEntry("items", "diamond", 1));
+        return new ShopServerEvent.BuyPre(rig.player(), rig.info(), cost, gain);
+    }
+
     private static int count(ServerPlayer player, net.minecraft.world.item.Item item) {
         int count = 0;
         for (ItemStack stack : player.getInventory().items) if (stack.is(item)) count += stack.getCount();
         return count;
     }
 
-    private record TestRig(ServerPlayer player, String shop, MerchantInfo merchant, ItemTerminalPart terminal,
+    private record TestRig(ServerPlayer player, String shop, MerchantInfo merchant, ShopInfo info,
+                           ItemTerminalPart terminal,
                            appeng.api.storage.MEStorage storage) {}
+
+    private enum FaultPoint { AFTER_GOODS_EXTRACT, BEFORE_PAYMENT_INSERT, AFTER_PARTIAL_PAYMENT_INSERT }
+
+    private static final class FaultStorage implements appeng.api.storage.MEStorage {
+        private final appeng.api.storage.MEStorage delegate;
+        private final FaultPoint point;
+
+        private FaultStorage(appeng.api.storage.MEStorage delegate, FaultPoint point) {
+            this.delegate = delegate;
+            this.point = point;
+        }
+
+        @Override
+        public long insert(AEKey key, long amount, Actionable mode, IActionSource source) {
+            if (mode == Actionable.MODULATE && key instanceof AEItemKey item && item.getReadOnlyStack().is(Items.IRON_INGOT)) {
+                if (point == FaultPoint.BEFORE_PAYMENT_INSERT) throw new IllegalStateException("injected before insert");
+                if (point == FaultPoint.AFTER_PARTIAL_PAYMENT_INSERT) {
+                    delegate.insert(key, Math.max(1, amount / 2), mode, source);
+                    throw new IllegalStateException("injected after partial insert");
+                }
+            }
+            return delegate.insert(key, amount, mode, source);
+        }
+
+        @Override
+        public long extract(AEKey key, long amount, Actionable mode, IActionSource source) {
+            long done = delegate.extract(key, amount, mode, source);
+            if (mode == Actionable.MODULATE && point == FaultPoint.AFTER_GOODS_EXTRACT
+                    && key instanceof AEItemKey item && item.getReadOnlyStack().is(Items.DIAMOND)) {
+                throw new IllegalStateException("injected after goods extract");
+            }
+            return done;
+        }
+
+        @Override public void getAvailableStacks(KeyCounter out) { delegate.getAvailableStacks(out); }
+        @Override public Component getDescription() { return delegate.getDescription(); }
+    }
 
     public static final class Counters {
         int success; int fail;

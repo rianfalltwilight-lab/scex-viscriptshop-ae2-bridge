@@ -20,8 +20,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Inventory;
@@ -34,10 +32,6 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
 
 @EventBusSubscriber(modid = ScexViScriptShopAe2.MOD_ID)
 public final class AtomicTradeHandler {
-    private static final AtomicBoolean HALTED_AFTER_ROLLBACK_FAILURE = new AtomicBoolean();
-    // Package-private, one-shot barrier used only by the separately packaged GameTest probe.
-    // Production code never installs it.
-    static final Map<String, Runnable> beforeCommitProbes = new ConcurrentHashMap<>();
     private AtomicTradeHandler() {}
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)
@@ -46,7 +40,7 @@ public final class AtomicTradeHandler {
         if (shop == null || TerminalBinding.find(shop).isEmpty()) return;
         event.setCanceled(true);
         ServerPlayer player = event.getPlayer();
-        if (HALTED_AFTER_ROLLBACK_FAILURE.get()) { fail(player, event, "error.rollback"); return; }
+        if (!TradeJournal.ensureReady(player.server)) { fail(player, event, "error.rollback"); return; }
         var binding = TerminalBinding.find(shop).orElseThrow();
         var resolved = binding.resolve(player.server);
         if (resolved.isEmpty()) { fail(player, event, "error.offline"); return; }
@@ -57,17 +51,22 @@ public final class AtomicTradeHandler {
             fail(player, event, "error.permission"); return;
         }
         synchronized (terminal.part().getGridNode().getGrid()) {
-            execute(player, shop, event, terminal.terminal().getInventory());
+            execute(player, shop, binding, event, terminal.terminal().getInventory());
         }
     }
 
-    private static void execute(ServerPlayer player, String shop, ShopServerEvent.BuyPre event, MEStorage storage) {
+    private static void execute(ServerPlayer player, String shop, TerminalBinding binding,
+                                ShopServerEvent.BuyPre event, MEStorage storage) {
         AggregatedResources cost = event.getCostSummary();
         AggregatedResources gain = event.getGainSummary();
         if (!validateShopRules(player, shop, event)) return;
         int maxGive = Config.maxShopUiGiveItemsPerPurchase.get();
         if (maxGive >= 0 && gain.getTotalItemCount() > maxGive) {
             fail(player, event, Component.translatable("viscript_shop.message.buy.too_many_items", maxGive)); return;
+        }
+        if (!gain.getCommands().isEmpty()) {
+            fail(player, event, Component.literal("Command rewards are disabled for durable ME-backed trades"));
+            return;
         }
         int moneyBefore = ViScriptShopServerUtil.getMoney(player);
         if (cost.getTotalMoney() > moneyBefore) {
@@ -89,41 +88,43 @@ public final class AtomicTradeHandler {
         }
         List<Move> payments = aggregateDebits(debits);
         if (!canInsert(storage, payments, source)) { fail(player, event, "error.capacity"); return; }
-
-        Runnable probe = beforeCommitProbes.remove(shop);
-        if (probe != null) probe.run();
-        // Close the simulation-to-commit window after any grid/topology callbacks have run.
-        // The server thread and grid monitor remain locked from this point through modulation.
         if (!canExtract(storage, goods, source) || !canInsert(storage, payments, source)) {
             fail(player, event, "error.offline");
             return;
         }
 
-        List<Move> extracted = new ArrayList<>();
-        List<Move> inserted = new ArrayList<>();
-        boolean inventoryDebited = false;
+        List<ItemStack> affectedKeys = new ArrayList<>();
+        goods.forEach(move -> affectedKeys.add(move.key().getReadOnlyStack()));
+        payments.forEach(move -> affectedKeys.add(move.key().getReadOnlyStack()));
+        TradeJournal journal;
         try {
-            modulateExtract(storage, goods, extracted, source);
-            debitPlayer(player.getInventory(), debits);
-            inventoryDebited = true;
-            modulateInsert(storage, payments, inserted, source);
+            journal = TradeJournal.prepare(player, shop, binding, event, storage, affectedKeys);
         } catch (RuntimeException failure) {
-            boolean networkRestored = rollbackNetwork(storage, source, extracted, inserted);
-            if (networkRestored && inventoryDebited) restorePlayer(player.getInventory(), debits);
-            if (!networkRestored) HALTED_AFTER_ROLLBACK_FAILURE.set(true);
+            ScexViScriptShopAe2.LOGGER.error("Cannot prepare durable ME transaction player={} shop={}",
+                    player.getGameProfile().getName(), shop, failure);
+            fail(player, event, "error.rollback");
+            return;
+        }
+
+        try {
+            modulateExtract(storage, goods, new ArrayList<>(), source);
+            debitPlayer(player.getInventory(), debits);
+            modulateInsert(storage, payments, new ArrayList<>(), source);
+            if (cost.getTotalMoney() > 0) ViScriptShopServerUtil.removeMoney(player, cost.getTotalMoney());
+            reduceStock(player, shop, event);
+            for (Move move : goods) give(player, move);
+            if (gain.getTotalMoney() > 0) ViScriptShopServerUtil.addMoney(player, gain.getTotalMoney());
+            if (gain.getTotalXp() > 0) player.giveExperiencePoints(gain.getTotalXp());
+            journal.commit(player, storage);
+        } catch (RuntimeException failure) {
+            boolean recovered = journal.recover(player);
+            if (!recovered) TradeJournal.markRecoveryPending();
             ScexViScriptShopAe2.LOGGER.error(
-                    "ME transaction aborted player={} shop={} networkRollback={} inventoryRestored={} bridgeHalted={}",
-                    player.getGameProfile().getName(), shop, networkRestored,
-                    networkRestored && inventoryDebited, HALTED_AFTER_ROLLBACK_FAILURE.get(), failure);
+                    "ME transaction aborted player={} shop={} recovered={} journal={}",
+                    player.getGameProfile().getName(), shop, recovered, recovered ? "removed" : "pending", failure);
             fail(player, event, "error.rollback"); return;
         }
 
-        if (cost.getTotalMoney() > 0) ViScriptShopServerUtil.removeMoney(player, cost.getTotalMoney());
-        reduceStock(player, shop, event);
-        for (Move move : goods) give(player, move);
-        if (gain.getTotalMoney() > 0) ViScriptShopServerUtil.addMoney(player, gain.getTotalMoney());
-        if (gain.getTotalXp() > 0) player.giveExperiencePoints(gain.getTotalXp());
-        gain.getCommands().forEach(command -> BuyMerchantPayload.executeCommands(player, command));
         NeoForge.EVENT_BUS.post(new ShopServerEvent.BuySuccess(player, event.getShopInfo(), cost, gain));
         safeRpc(player, S2CPayload.SEND_MESSAGE, Message.Type.SUCCESS,
                 Component.translatable("viscript_shop.message.buySuccess"));
@@ -178,11 +179,6 @@ public final class AtomicTradeHandler {
             }
         }
         for (SlotDebit debit : debits) inventory.getItem(debit.slot()).shrink(debit.amount());
-        inventory.setChanged();
-    }
-
-    private static void restorePlayer(Inventory inventory, List<SlotDebit> debits) {
-        for (SlotDebit debit : debits) inventory.setItem(debit.slot(), debit.original().copy());
         inventory.setChanged();
     }
 
@@ -246,20 +242,6 @@ public final class AtomicTradeHandler {
             if (found < need.amount()) return need.stack();
         }
         return ItemStack.EMPTY;
-    }
-
-    private static boolean rollbackNetwork(MEStorage storage, IActionSource source,
-                                           List<Move> extracted, List<Move> inserted) {
-        boolean ok = true;
-        for (int i = inserted.size() - 1; i >= 0; i--) {
-            Move move = inserted.get(i);
-            ok &= storage.extract(move.key(), move.amount(), Actionable.MODULATE, source) == move.amount();
-        }
-        for (int i = extracted.size() - 1; i >= 0; i--) {
-            Move move = extracted.get(i);
-            ok &= storage.insert(move.key(), move.amount(), Actionable.MODULATE, source) == move.amount();
-        }
-        return ok;
     }
 
     private static boolean validateShopRules(ServerPlayer player, String shop, ShopServerEvent.BuyPre event) {
