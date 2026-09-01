@@ -29,7 +29,14 @@ neoForge {
     runs {
         gameTestServer {
             type = 'gameTestServer'
-            systemProperty 'neoforge.enabledGameTestNamespaces', 'scex_viscriptshop_ae2'
+            def crashProbe = project.hasProperty('walKillPhase') || project.hasProperty('walVerifyPhase')
+            systemProperty 'neoforge.enabledGameTestNamespaces', crashProbe
+                    ? 'scex_viscriptshop_ae2_crash_probe' : 'scex_viscriptshop_ae2'
+            ['walKillPhase', 'walVerifyPhase', 'walSentinel', 'walVerifySentinel'].each { propertyName ->
+                if (project.hasProperty(propertyName)) {
+                    systemProperty "scex.${propertyName}", project.property(propertyName).toString()
+                }
+            }
         }
         server { server() }
     }
@@ -45,6 +52,12 @@ dependencies {
 }
 
 tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+
+tasks.named('processGametestResources') {
+    from('src/gametest/resources/data/scex_viscriptshop_ae2/structure/empty.nbt') {
+        into 'data/scex_viscriptshop_ae2_crash_probe/structure'
+    }
+}
 
 jar {
     manifest.attributes(

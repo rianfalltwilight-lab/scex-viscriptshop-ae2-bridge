@@ -28,7 +28,6 @@ import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.items.ItemHandlerHelper;
 
 @EventBusSubscriber(modid = ScexViScriptShopAe2.MOD_ID)
 public final class AtomicTradeHandler {
@@ -60,6 +59,11 @@ public final class AtomicTradeHandler {
         AggregatedResources cost = event.getCostSummary();
         AggregatedResources gain = event.getGainSummary();
         if (!validateShopRules(player, shop, event)) return;
+        if (cost.getTotalMoney() < 0 || gain.getTotalMoney() < 0
+                || cost.getTotalXp() < 0 || gain.getTotalXp() < 0) {
+            fail(player, event, "error.rollback");
+            return;
+        }
         int maxGive = Config.maxShopUiGiveItemsPerPurchase.get();
         if (maxGive >= 0 && gain.getTotalItemCount() > maxGive) {
             fail(player, event, Component.translatable("viscript_shop.message.buy.too_many_items", maxGive)); return;
@@ -72,6 +76,10 @@ public final class AtomicTradeHandler {
         if (cost.getTotalMoney() > moneyBefore) {
             fail(player, event, Component.translatable("viscript_shop.message.noEnoughMoney",
                     cost.getTotalMoney() - moneyBefore)); return;
+        }
+        if (cost.getTotalXp() > player.totalExperience) {
+            fail(player, event, Component.literal("Not enough experience"));
+            return;
         }
 
         IActionSource source = IActionSource.ofPlayer(player);
@@ -88,6 +96,11 @@ public final class AtomicTradeHandler {
         }
         List<Move> payments = aggregateDebits(debits);
         if (!canInsert(storage, payments, source)) { fail(player, event, "error.capacity"); return; }
+        InventoryPlan inventoryPlan = planInventoryCommit(player.getInventory(), debits, goods);
+        if (inventoryPlan == null) {
+            fail(player, event, Component.literal("Your inventory cannot hold all purchased items"));
+            return;
+        }
         if (!canExtract(storage, goods, source) || !canInsert(storage, payments, source)) {
             fail(player, event, "error.offline");
             return;
@@ -96,9 +109,18 @@ public final class AtomicTradeHandler {
         List<ItemStack> affectedKeys = new ArrayList<>();
         goods.forEach(move -> affectedKeys.add(move.key().getReadOnlyStack()));
         payments.forEach(move -> affectedKeys.add(move.key().getReadOnlyStack()));
+        Map<AEItemKey, Long> networkDeltas = new LinkedHashMap<>();
+        try {
+            goods.forEach(move -> networkDeltas.merge(move.key(), -move.amount(), Math::addExact));
+            payments.forEach(move -> networkDeltas.merge(move.key(), move.amount(), Math::addExact));
+        } catch (ArithmeticException overflow) {
+            fail(player, event, "error.rollback");
+            return;
+        }
         TradeJournal journal;
         try {
-            journal = TradeJournal.prepare(player, shop, binding, event, storage, affectedKeys);
+            journal = TradeJournal.prepare(player, shop, binding, event, storage, affectedKeys,
+                    inventoryPlan.before(), inventoryPlan.after(), networkDeltas);
         } catch (RuntimeException failure) {
             ScexViScriptShopAe2.LOGGER.error("Cannot prepare durable ME transaction player={} shop={}",
                     player.getGameProfile().getName(), shop, failure);
@@ -108,16 +130,16 @@ public final class AtomicTradeHandler {
 
         try {
             modulateExtract(storage, goods, new ArrayList<>(), source);
-            debitPlayer(player.getInventory(), debits);
+            applyInventoryPlan(player.getInventory(), inventoryPlan);
             modulateInsert(storage, payments, new ArrayList<>(), source);
             if (cost.getTotalMoney() > 0) ViScriptShopServerUtil.removeMoney(player, cost.getTotalMoney());
+            if (cost.getTotalXp() > 0) player.giveExperiencePoints(-cost.getTotalXp());
             reduceStock(player, shop, event);
-            for (Move move : goods) give(player, move);
             if (gain.getTotalMoney() > 0) ViScriptShopServerUtil.addMoney(player, gain.getTotalMoney());
             if (gain.getTotalXp() > 0) player.giveExperiencePoints(gain.getTotalXp());
             journal.commit(player, storage);
         } catch (RuntimeException failure) {
-            boolean recovered = journal.recover(player);
+            boolean recovered = journal.rollbackInProcess(player);
             if (!recovered) TradeJournal.markRecoveryPending();
             ScexViScriptShopAe2.LOGGER.error(
                     "ME transaction aborted player={} shop={} recovered={} journal={}",
@@ -125,7 +147,12 @@ public final class AtomicTradeHandler {
             fail(player, event, "error.rollback"); return;
         }
 
-        NeoForge.EVENT_BUS.post(new ShopServerEvent.BuySuccess(player, event.getShopInfo(), cost, gain));
+        try {
+            NeoForge.EVENT_BUS.post(new ShopServerEvent.BuySuccess(player, event.getShopInfo(), cost, gain));
+        } catch (RuntimeException listenerFailure) {
+            ScexViScriptShopAe2.LOGGER.error("BuySuccess listener failed after durable transaction player={} shop={}",
+                    player.getGameProfile().getName(), shop, listenerFailure);
+        }
         safeRpc(player, S2CPayload.SEND_MESSAGE, Message.Type.SUCCESS,
                 Component.translatable("viscript_shop.message.buySuccess"));
         safeRpc(player, S2CPayload.RELOAD_SHOP_UI,
@@ -171,14 +198,42 @@ public final class AtomicTradeHandler {
         return List.copyOf(planned.values());
     }
 
-    private static void debitPlayer(Inventory inventory, List<SlotDebit> debits) {
-        for (SlotDebit debit : debits) {
-            ItemStack current = inventory.getItem(debit.slot());
-            if (!ItemStack.isSameItemSameComponents(current, debit.original()) || current.getCount() < debit.amount()) {
+    private static InventoryPlan planInventoryCommit(Inventory inventory, List<SlotDebit> debits, List<Move> goods) {
+        List<ItemStack> before = new ArrayList<>(inventory.getContainerSize());
+        List<ItemStack> after = new ArrayList<>(inventory.getContainerSize());
+        for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
+            before.add(inventory.getItem(slot).copy());
+            after.add(inventory.getItem(slot).copy());
+        }
+        for (SlotDebit debit : debits) after.get(debit.slot()).shrink(debit.amount());
+        int mainSlots = inventory.items.size();
+        for (Move move : goods) {
+            long remaining = move.amount();
+            ItemStack template = move.key().getReadOnlyStack();
+            for (int slot = 0; slot < mainSlots && remaining > 0; slot++) {
+                ItemStack current = after.get(slot);
+                if (current.isEmpty() || !ItemStack.isSameItemSameComponents(current, template)) continue;
+                int add = (int) Math.min(remaining, current.getMaxStackSize() - current.getCount());
+                if (add > 0) { current.grow(add); remaining -= add; }
+            }
+            for (int slot = 0; slot < mainSlots && remaining > 0; slot++) {
+                if (!after.get(slot).isEmpty()) continue;
+                int add = (int) Math.min(remaining, template.getMaxStackSize());
+                after.set(slot, move.key().toStack(add));
+                remaining -= add;
+            }
+            if (remaining != 0) return null;
+        }
+        return new InventoryPlan(List.copyOf(before), List.copyOf(after));
+    }
+
+    private static void applyInventoryPlan(Inventory inventory, InventoryPlan plan) {
+        for (int slot = 0; slot < plan.before().size(); slot++) {
+            if (!ItemStack.matches(inventory.getItem(slot), plan.before().get(slot))) {
                 throw new TransactionFailure("player inventory changed during commit");
             }
         }
-        for (SlotDebit debit : debits) inventory.getItem(debit.slot()).shrink(debit.amount());
+        for (int slot = 0; slot < plan.after().size(); slot++) inventory.setItem(slot, plan.after().get(slot).copy());
         inventory.setChanged();
     }
 
@@ -245,6 +300,7 @@ public final class AtomicTradeHandler {
     }
 
     private static boolean validateShopRules(ServerPlayer player, String shop, ShopServerEvent.BuyPre event) {
+        Map<PurchaseKey, Long> requested = new LinkedHashMap<>();
         for (var entry : event.getGainSummary().getPurchaseEntries()) {
             CategoryInfo category = event.getShopInfo().getCategoryInfos().stream()
                     .filter(c -> c.getId().equals(entry.getCategoryId())).findFirst().orElse(null);
@@ -256,8 +312,21 @@ public final class AtomicTradeHandler {
                     ViScriptShopServerUtil.getStageFlags(player))) {
                 fail(player, event, Component.translatable("viscript_shop.message.stage_flags.missing")); return false;
             }
+            try {
+                requested.merge(new PurchaseKey(category.getId(), merchant.getId()), (long) entry.getBuyCount(),
+                        Math::addExact);
+            } catch (ArithmeticException overflow) {
+                fail(player, event, "error.rollback");
+                return false;
+            }
+        }
+        for (var request : requested.entrySet()) {
+            CategoryInfo category = event.getShopInfo().getCategoryInfos().stream()
+                    .filter(c -> c.getId().equals(request.getKey().category())).findFirst().orElseThrow();
+            MerchantInfo merchant = category.getMerchants().stream()
+                    .filter(m -> m.getId().equals(request.getKey().merchant())).findFirst().orElseThrow();
             int stock = ViScriptShopServerUtil.getEffectiveMerchantStock(player, shop, category.getId(), merchant);
-            if (stock >= 0 && entry.getBuyCount() > stock) {
+            if (stock >= 0 && request.getValue() > stock) {
                 fail(player, event, Component.translatable("viscript_shop.message.shoppingCart.out_of_stock"));
                 return false;
             }
@@ -274,15 +343,6 @@ public final class AtomicTradeHandler {
                     .filter(m -> m.getId().equals(entry.getMerchantId())).findFirst().orElse(null);
             if (merchant != null) ViScriptShopServerUtil.reduceMerchantStock(player, shop, category.getId(), merchant,
                     entry.getBuyCount());
-        }
-    }
-
-    private static void give(ServerPlayer player, Move move) {
-        int left = Math.toIntExact(move.amount());
-        while (left > 0) {
-            int count = Math.min(left, move.key().getReadOnlyStack().getMaxStackSize());
-            ItemHandlerHelper.giveItemToPlayer(player, move.key().toStack(count));
-            left -= count;
         }
     }
 
@@ -310,5 +370,7 @@ public final class AtomicTradeHandler {
     private record Need(ItemStack stack, long amount, AggregatedResources.ItemEntry entry) {}
     private record Move(AEItemKey key, long amount) {}
     private record SlotDebit(int slot, ItemStack original, int amount) {}
+    private record PurchaseKey(String category, String merchant) {}
+    private record InventoryPlan(List<ItemStack> before, List<ItemStack> after) {}
     private static final class TransactionFailure extends RuntimeException { TransactionFailure(String m) { super(m); } }
 }
