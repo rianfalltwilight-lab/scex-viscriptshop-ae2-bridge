@@ -14,10 +14,14 @@ jobs:
     if: github.repository == 'rianfalltwilight-lab/scex-viscriptshop-ae2-bridge'
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
+      - name: Check out release metadata
+        uses: actions/checkout@v4
+
+      - name: Check out tagged source
         uses: actions/checkout@v4
         with:
           ref: v0.3.3
+          path: release-source
 
       - name: Set up Java 21
         uses: actions/setup-java@v4
@@ -30,6 +34,7 @@ jobs:
 
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
+        working-directory: release-source
 
       - name: Configure reproducible archive build
         shell: bash
@@ -45,12 +50,14 @@ jobs:
 
       - name: First clean assembly without tests
         shell: bash
+        working-directory: release-source
         run: |
           ./gradlew clean assemble --no-build-cache \
             --init-script "$RUNNER_TEMP/reproducible-archives.gradle"
 
       - name: Record first build hashes
         shell: bash
+        working-directory: release-source
         run: |
           cd build/libs
           sha256sum \
@@ -60,6 +67,7 @@ jobs:
 
       - name: Rebuild and verify reproducibility
         shell: bash
+        working-directory: release-source
         run: |
           ./gradlew clean assemble --no-build-cache \
             --init-script "$RUNNER_TEMP/reproducible-archives.gradle"
@@ -77,9 +85,9 @@ jobs:
         shell: bash
         run: |
           assets=(
-            'build/libs/scex-viscriptshop-ae2-bridge-neoforge-1.21.1-0.3.3.jar#SCEX ViScriptShop AE2 Bridge 0.3.3'
-            'build/libs/scex-viscriptshop-ae2-bridge-neoforge-1.21.1-0.3.3-sources.jar#Source JAR'
-            'build/libs/SHA256SUMS.txt#SHA-256 checksums'
+            'release-source/build/libs/scex-viscriptshop-ae2-bridge-neoforge-1.21.1-0.3.3.jar#SCEX ViScriptShop AE2 Bridge 0.3.3'
+            'release-source/build/libs/scex-viscriptshop-ae2-bridge-neoforge-1.21.1-0.3.3-sources.jar#Source JAR'
+            'release-source/build/libs/SHA256SUMS.txt#SHA-256 checksums'
           )
           if gh release view v0.3.3 >/dev/null 2>&1; then
             gh release edit v0.3.3 \
