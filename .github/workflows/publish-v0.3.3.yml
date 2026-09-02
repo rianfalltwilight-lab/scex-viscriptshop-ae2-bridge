@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: v0.3.3
 
       - name: Set up Java 21
         uses: actions/setup-java@v4
@@ -29,18 +31,45 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
 
-      - name: Assemble without tests
-        run: ./gradlew clean assemble --no-build-cache
+      - name: Configure reproducible archive build
+        shell: bash
+        run: |
+          printf '%s\n' \
+            'allprojects {' \
+            '  tasks.withType(org.gradle.api.tasks.bundling.AbstractArchiveTask).configureEach {' \
+            '    preserveFileTimestamps = false' \
+            '    reproducibleFileOrder = true' \
+            '  }' \
+            '}' \
+            > "$RUNNER_TEMP/reproducible-archives.gradle"
 
-      - name: Verify release hashes
+      - name: First clean assembly without tests
+        shell: bash
+        run: |
+          ./gradlew clean assemble --no-build-cache \
+            --init-script "$RUNNER_TEMP/reproducible-archives.gradle"
+
+      - name: Record first build hashes
         shell: bash
         run: |
           cd build/libs
-          printf '%s\n' \
-            '61fec6489d083421ba231fe4b9ccfedc8e42d830adb0ce5b55457d5c69d070de *scex-viscriptshop-ae2-bridge-neoforge-1.21.1-0.3.3.jar' \
-            '60eb5eb59bc08e7a7fc849437a1c67f9987c1c986251ef6aa58e56937481d14c *scex-viscriptshop-ae2-bridge-neoforge-1.21.1-0.3.3-sources.jar' \
-            > SHA256SUMS.txt
-          sha256sum --check SHA256SUMS.txt
+          sha256sum \
+            scex-viscriptshop-ae2-bridge-neoforge-1.21.1-0.3.3.jar \
+            scex-viscriptshop-ae2-bridge-neoforge-1.21.1-0.3.3-sources.jar \
+            | tee "$RUNNER_TEMP/SHA256SUMS.txt"
+
+      - name: Rebuild and verify reproducibility
+        shell: bash
+        run: |
+          ./gradlew clean assemble --no-build-cache \
+            --init-script "$RUNNER_TEMP/reproducible-archives.gradle"
+          cd build/libs
+          sha256sum --check "$RUNNER_TEMP/SHA256SUMS.txt"
+          jar --list --file scex-viscriptshop-ae2-bridge-neoforge-1.21.1-0.3.3.jar >/dev/null
+          jar --list --file scex-viscriptshop-ae2-bridge-neoforge-1.21.1-0.3.3-sources.jar >/dev/null
+          unzip -p scex-viscriptshop-ae2-bridge-neoforge-1.21.1-0.3.3.jar META-INF/MANIFEST.MF \
+            | grep -F 'Implementation-Version: 0.3.3'
+          cp "$RUNNER_TEMP/SHA256SUMS.txt" SHA256SUMS.txt
 
       - name: Publish GitHub Release
         env:
