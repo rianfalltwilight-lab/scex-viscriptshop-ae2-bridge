@@ -1,7 +1,10 @@
 name: Publish v0.3.3
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-v0.3.3.yml
 
 permissions:
   contents: write
