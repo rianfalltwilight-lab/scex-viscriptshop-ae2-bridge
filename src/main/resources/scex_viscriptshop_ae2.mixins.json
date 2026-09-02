@@ -3,6 +3,7 @@
   "minVersion": "0.8",
   "package": "cn.scex.viscriptshopae2.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": ["BuyMerchantPayloadMixin", "GetItemCountC2SPayloadMixin"],
+  "mixins": ["BuyMerchantPayloadMixin", "GetItemCountC2SPayloadMixin", "ServerOpenShopMixin"],
+  "client": ["ViScriptShopClientUtilMixin"],
   "injectors": { "defaultRequire": 1 }
 }

@@ -60,6 +60,17 @@ final class TradeJournal {
                                 ShopServerEvent.BuyPre event, MEStorage storage,
                                 List<ItemStack> affectedKeys, List<ItemStack> inventoryBefore,
                                 List<ItemStack> inventoryAfter, Map<AEItemKey, Long> networkDeltas) {
+        int postMoney = Math.addExact(Math.subtractExact(ViScriptShopServerUtil.getMoney(player),
+                event.getCostSummary().getTotalMoney()), event.getGainSummary().getTotalMoney());
+        return prepare(player, shop, binding, event, storage, affectedKeys, inventoryBefore, inventoryAfter,
+                networkDeltas, postMoney);
+    }
+
+    static TradeJournal prepare(ServerPlayer player, String shop, ConnectorBinding binding,
+                                ShopServerEvent.BuyPre event, MEStorage storage,
+                                List<ItemStack> affectedKeys, List<ItemStack> inventoryBefore,
+                                List<ItemStack> inventoryAfter, Map<AEItemKey, Long> networkDeltas,
+                                int postMoney) {
         UUID id = UUID.randomUUID();
         CompoundTag root = new CompoundTag();
         root.putInt("format", FORMAT);
@@ -72,8 +83,7 @@ final class TradeJournal {
         root.putString("dimension", binding.dimension().location().toString());
         root.putLong("connector", binding.pos().asLong());
         root.putInt("money", ViScriptShopServerUtil.getMoney(player));
-        root.putInt("postMoney", Math.addExact(Math.subtractExact(ViScriptShopServerUtil.getMoney(player),
-                event.getCostSummary().getTotalMoney()), event.getGainSummary().getTotalMoney()));
+        root.putInt("postMoney", postMoney);
         root.putInt("xpTotal", player.totalExperience);
         root.putInt("xpLevel", player.experienceLevel);
         root.putFloat("xpProgress", player.experienceProgress);

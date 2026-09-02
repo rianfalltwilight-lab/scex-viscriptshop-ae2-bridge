@@ -11,6 +11,7 @@ import appeng.core.definitions.AEBlocks;
 import appeng.core.definitions.AEItems;
 import cn.scex.viscriptshopae2.ConnectorBinding;
 import cn.scex.viscriptshopae2.ConnectorInventory;
+import cn.scex.viscriptshopae2.CurrencyCatalog;
 import cn.scex.viscriptshopae2.MeShopConnectorBlockEntity;
 import cn.scex.viscriptshopae2.ModContent;
 import com.lowdragmc.lowdraglib2.syncdata.rpc.RPCSender;
@@ -27,6 +28,7 @@ import com.viscriptshop.util.ViScriptShopServerUtil;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -50,11 +52,11 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 @GameTestHolder("scex_viscriptshop_ae2")
 @PrefixGameTestTemplate(false)
 public final class BridgeGameTests {
-    // Keep every AE fixture one block inside the template boundary. GameTests run in parallel, and
-    // boundary-adjacent AE blocks can otherwise join the neighboring test's grid intermittently.
-    private static final BlockPos CONNECTOR = new BlockPos(1, 2, 1);
-    private static final BlockPos DRIVE = new BlockPos(2, 2, 1);
-    private static final BlockPos POWER = new BlockPos(3, 2, 1);
+    // Keep the entire AE fixture on the template's central vertical axis. GameTests run in parallel;
+    // a horizontal fixture can otherwise touch a neighboring template after the batch grows.
+    private static final BlockPos CONNECTOR = new BlockPos(2, 1, 2);
+    private static final BlockPos DRIVE = new BlockPos(2, 2, 2);
+    private static final BlockPos POWER = new BlockPos(2, 3, 2);
 
     private BridgeGameTests() {}
 
@@ -169,6 +171,75 @@ public final class BridgeGameTests {
             helper.assertTrue(nativeCount == 3 && networkCount == 5
                     && ConnectorInventory.saturatingAdd(nativeCount, networkCount) == 8,
                     "shop availability must combine backpack and connected ME counts");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 140)
+    public static void meCurrencyPaysMoneyPriceAndKeepsChange(GameTestHelper helper) {
+        TestRig rig = setupRig(helper, "me-money-change", 1);
+        configureMoneyPurchase(rig, 3);
+        helper.runAfterDelay(30, () -> {
+            insert(rig, Items.GOLD_NUGGET, 1);
+            Counters counters = invokeCurrencyCounted(rig, rig.storage());
+            helper.assertTrue(counters.success == 1 && counters.fail == 0,
+                    "one 5C AE coin must pay a 3C native money price");
+            helper.assertTrue(meCount(rig, Items.GOLD_NUGGET) == 0 && meCount(rig, Items.DIAMOND) == 1,
+                    "currency must be removed from ME and purchased goods inserted into ME");
+            helper.assertTrue(ViScriptShopServerUtil.getMoney(rig.player()) == 2,
+                    "unused physical coin value must remain as digital change");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 140)
+    public static void digitalBalanceAndMeCurrencyCanJointlyPay(GameTestHelper helper) {
+        TestRig rig = setupRig(helper, "money-combined", 1);
+        configureMoneyPurchase(rig, 7);
+        ViScriptShopServerUtil.setMoney(rig.player(), 2);
+        helper.runAfterDelay(30, () -> {
+            insert(rig, Items.GOLD_NUGGET, 1);
+            Counters counters = invokeCurrencyCounted(rig, rig.storage());
+            helper.assertTrue(counters.success == 1 && counters.fail == 0,
+                    "2C digital balance plus one 5C AE coin must pay 7C");
+            helper.assertTrue(ViScriptShopServerUtil.getMoney(rig.player()) == 0
+                    && meCount(rig, Items.GOLD_NUGGET) == 0 && meCount(rig, Items.DIAMOND) == 1,
+                    "combined payment must debit exactly the native price");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 140)
+    public static void insufficientCombinedMoneyDoesNotMutate(GameTestHelper helper) {
+        TestRig rig = setupRig(helper, "money-insufficient", 1);
+        configureMoneyPurchase(rig, 7);
+        ViScriptShopServerUtil.setMoney(rig.player(), 1);
+        helper.runAfterDelay(30, () -> {
+            insert(rig, Items.GOLD_NUGGET, 1);
+            Counters counters = invokeCurrencyCounted(rig, rig.storage());
+            helper.assertTrue(counters.success == 0 && counters.fail == 1,
+                    "1C digital plus one 5C AE coin must not pay 7C");
+            helper.assertTrue(ViScriptShopServerUtil.getMoney(rig.player()) == 1
+                    && meCount(rig, Items.GOLD_NUGGET) == 1 && meCount(rig, Items.DIAMOND) == 0,
+                    "insufficient currency must preserve both balances and goods");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 160)
+    public static void meCurrencyRollbackRestoresCoinAndMoney(GameTestHelper helper) {
+        TestRig rig = setupRig(helper, "money-rollback", 1);
+        configureMoneyPurchase(rig, 3);
+        helper.runAfterDelay(30, () -> {
+            insert(rig, Items.GOLD_NUGGET, 1);
+            Counters counters = invokeCurrencyCounted(rig, new FaultStorage(rig.storage()));
+            helper.assertTrue(counters.success == 0 && counters.fail == 1,
+                    "injected failure must emit BuyFail only");
+            helper.assertTrue(ViScriptShopServerUtil.getMoney(rig.player()) == 0
+                    && meCount(rig, Items.GOLD_NUGGET) == 1 && meCount(rig, Items.DIAMOND) == 0,
+                    "rollback must restore the physical AE coin and original digital balance");
+            helper.assertTrue(ViScriptShopServerUtil.getEffectiveMerchantStock(rig.player(), rig.shop(), "items",
+                    rig.merchant()) == 1, "currency rollback must preserve native stock");
             helper.succeed();
         });
     }
@@ -334,6 +405,27 @@ public final class BridgeGameTests {
         }
     }
 
+    private static Counters invokeCurrencyCounted(TestRig rig, MEStorage storage) {
+        Counters counters = new Counters();
+        NeoForge.EVENT_BUS.register(counters);
+        try {
+            ShopServerEvent.BuyPre event = makeMoneyEvent(rig);
+            Method execute = cn.scex.viscriptshopae2.AtomicTradeHandler.class.getDeclaredMethod("execute",
+                    ServerPlayer.class, String.class, ConnectorBinding.class,
+                    ShopServerEvent.BuyPre.class, MEStorage.class, CurrencyCatalog.class);
+            execute.setAccessible(true);
+            execute.invoke(null, rig.player(), rig.shop(), ConnectorBinding.find(rig.player()).orElseThrow(),
+                    event, storage, testCurrencyCatalog());
+        } catch (java.lang.reflect.InvocationTargetException failure) {
+            throw new AssertionError("Currency core invocation escaped transaction boundary", failure.getCause());
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError("Cannot invoke currency transaction core", failure);
+        } finally {
+            NeoForge.EVENT_BUS.unregister(counters);
+        }
+        return counters;
+    }
+
     private static ShopServerEvent.BuyPre makeEvent(TestRig rig) {
         AggregatedResources cost = new AggregatedResources();
         cost.addItemEntry(rig.merchant().getItemA().copyWithCount(1), rig.merchant().getItemA().getCount(),
@@ -343,6 +435,29 @@ public final class BridgeGameTests {
         gain.setTotalXp(rig.merchant().getXp());
         gain.getPurchaseEntries().add(new AggregatedResources.PurchaseEntry("items", "diamond", 1));
         return new ShopServerEvent.BuyPre(rig.player(), rig.info(), cost, gain);
+    }
+
+    private static void configureMoneyPurchase(TestRig rig, int price) {
+        CategoryInfo category = rig.info().getCategoryInfos().getFirst();
+        category.setShopType(CategoryInfo.ShopType.CURRENCY);
+        rig.merchant().setTradeType(MerchantInfo.TradeType.BUY);
+        rig.merchant().setMoney(price);
+        ViScriptShopServerUtil.setShopInfo(rig.shop(), rig.info());
+    }
+
+    private static ShopServerEvent.BuyPre makeMoneyEvent(TestRig rig) {
+        AggregatedResources cost = new AggregatedResources();
+        cost.setTotalMoney(rig.merchant().getMoney());
+        AggregatedResources gain = new AggregatedResources();
+        gain.addItem(rig.merchant().getItemResult().copyWithCount(1), rig.merchant().getItemResult().getCount());
+        gain.setTotalXp(rig.merchant().getXp());
+        gain.getPurchaseEntries().add(new AggregatedResources.PurchaseEntry("items", "diamond", 1));
+        return new ShopServerEvent.BuyPre(rig.player(), rig.info(), cost, gain);
+    }
+
+    private static CurrencyCatalog testCurrencyCatalog() {
+        return stack -> Map.of(Items.IRON_NUGGET, 1, Items.GOLD_NUGGET, 5, Items.EMERALD, 10)
+                .getOrDefault(stack.getItem(), 0);
     }
 
     private static IActionSource source(TestRig rig) { return IActionSource.ofPlayer(rig.player()); }

@@ -9,6 +9,7 @@ import appeng.api.storage.MEStorage;
 import appeng.blockentity.storage.DriveBlockEntity;
 import appeng.core.definitions.AEBlocks;
 import appeng.core.definitions.AEItems;
+import appeng.me.helpers.IGridConnectedBlockEntity;
 import cn.scex.viscriptshopae2.MeShopConnectorBlockEntity;
 import cn.scex.viscriptshopae2.ModContent;
 import com.lowdragmc.lowdraglib2.syncdata.rpc.RPCSender;
@@ -45,9 +46,9 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 @GameTestHolder("scex_viscriptshop_ae2_crash_probe")
 @PrefixGameTestTemplate(false)
 public final class CrashRecoveryGameTests {
-    private static final BlockPos CONNECTOR = new BlockPos(2, 2, 2);
-    private static final BlockPos DRIVE = new BlockPos(3, 2, 2);
-    private static final BlockPos POWER = new BlockPos(4, 2, 2);
+    private static final BlockPos CONNECTOR = new BlockPos(1, 2, 2);
+    private static final BlockPos DRIVE = new BlockPos(2, 2, 2);
+    private static final BlockPos POWER = new BlockPos(3, 2, 2);
     private CrashRecoveryGameTests() {}
 
     @GameTest(template = "empty", timeoutTicks = 200)
@@ -144,7 +145,8 @@ public final class CrashRecoveryGameTests {
         var restartBinding = cn.scex.viscriptshopae2.ConnectorBinding.find(player).orElseThrow();
         helper.assertTrue(restartBinding.resolve(player.server).isPresent(),
                 "restart fixture must resolve the saved online connector before WAL replay: "
-                        + restartBinding.unavailableReason(player.server));
+                        + restartBinding.unavailableReason(player.server) + "; "
+                        + fixtureDiagnostic(helper, connectorPos));
 
         ItemStack slotBefore = player.getInventory().getItem(slots.getCompound(0).getInt("slot")).copy();
         boolean recovered = JournalProbeAccessor.simulateNewProcessAndTryReplayAll(player.server);
@@ -166,6 +168,39 @@ public final class CrashRecoveryGameTests {
                 recovered ? "restart_recovered" : "restart_failed_closed_as_required");
         setFixtureForced(helper, connectorPos, false);
         helper.succeed();
+    }
+
+    private static String fixtureDiagnostic(GameTestHelper helper, BlockPos connectorPos) {
+        StringBuilder result = new StringBuilder("fixture=");
+        for (int offset = 0; offset <= 2; offset++) {
+            BlockPos pos = connectorPos.relative(Direction.EAST, offset);
+            var state = helper.getLevel().getBlockState(pos);
+            var blockEntity = helper.getLevel().getBlockEntity(pos);
+            if (offset > 0) result.append(',');
+            result.append(offset).append(':')
+                    .append(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()))
+                    .append('/')
+                    .append(blockEntity == null ? "none" : blockEntity.getClass().getSimpleName());
+            if (blockEntity instanceof IGridConnectedBlockEntity networked) {
+                var managedNode = networked.getMainNode();
+                var node = managedNode.getNode();
+                result.append("[ready=").append(managedNode.isReady())
+                        .append(",node=").append(node != null);
+                if (node != null) {
+                    result.append(",active=").append(node.isActive())
+                            .append(",online=").append(node.isOnline())
+                            .append(",grid=").append(node.getGrid() != null)
+                            .append(",booted=").append(node.hasGridBooted())
+                            .append(",powered=").append(node.isPowered())
+                            .append(",channel=").append(node.meetsChannelRequirements())
+                            .append(",channels=").append(node.getUsedChannels())
+                            .append('/').append(node.getMaxChannels())
+                            .append(",connections=").append(node.getConnections().size());
+                }
+                result.append(']');
+            }
+        }
+        return result.toString();
     }
 
     private static void setFixtureForced(GameTestHelper helper, BlockPos connectorPos, boolean forced) {

@@ -1,20 +1,23 @@
-# Verification plan and v0.2.0 evidence
+# Verification plan and v0.3.0 evidence
 
 Target runtime: Java 21, Minecraft 1.21.1, NeoForge 21.1.248, ViScriptShop 1.2.0 and AE2 19.2.17.
 
-Final evidence collected on 2026-09-01 and independently audited on 2026-09-02:
+Baseline v0.2.0 evidence was collected on 2026-09-01 and independently audited on 2026-09-02.
+The v0.3.0 currency extension was verified on 2026-09-02:
 
 - two independent `gradlew clean build --no-build-cache` runs passed and produced byte-identical
   main, sources and GameTest-probe JAR hashes;
-- after isolating every parallel AE fixture from the template boundary, two consecutive
-  `gradlew runGameTestServer --no-build-cache` audit runs passed all 12 required tests in 997.8 ms
-  and 1.054 s, including a normal restart of the same test world;
+- after moving every parallel AE fixture onto the template's central vertical axis, two consecutive
+  `gradlew runGameTestServer` runs passed all 16 required tests in 1.349 s and 1.390 s, including a
+  normal restart of the same test world;
+- after registering the connector's AE2 in-world grid-node capability, the final 16-test regression
+  passed again in 1.197 s and a previously disconnected restart fixture rejoined the powered grid;
 - external hard-kill/restart matrix: all four required phase outcomes passed;
 - formal JAR audit: connector classes/assets present and all GameTest/probe classes absent.
 
 Release gates:
 
-1. `gradlew runGameTestServer --no-build-cache` must pass all 12 required tests with a real AE2
+1. `gradlew runGameTestServer --no-build-cache` must pass all 16 required tests with a real AE2
    connector, grid, drive and storage cell.
 2. `scripts/run-wal-hard-kill-probe.ps1` must pass all four external process-kill/restart phases.
 3. `gradlew clean build --no-build-cache` must pass.
@@ -31,6 +34,10 @@ Release gates:
 - A full ME network rejects the purchase before any payment is consumed.
 - ViScriptShop component matching is honored for ME items.
 - Native UI availability combines backpack and ME counts.
+- Native UI money availability combines digital money and the value of linked ME currency.
+- A money price can be paid entirely by ME currency or jointly by digital balance and ME currency.
+- A larger physical denomination pays a smaller price and preserves the remainder as digital change.
+- Insufficient combined money causes no mutation; injected failure restores coins and digital money.
 - Missing/offline connector delegates to native backpack-only behavior.
 - Native XP and stock transitions commit once beside ME item movement.
 - Injected failure after ME reward insertion rolls back ME, backpack and stock without item drops.
@@ -50,5 +57,5 @@ The harness waits for a file-fsynced sentinel, forcibly terminates the Gradle/JV
 NeoForge JVM against the same world, verifies recovery, and archives the transaction directory.
 Probe classes and fault injection live only in the `gametest` source set and must not ship.
 
-Production under `E:\Minecarft\B-03-SCEX-LegacyGenesis` remains unchanged until an explicit release
-approval is handed to `SCEX-长期维护`.
+Production under `E:\Minecarft\B-03-SCEX-LegacyGenesis` remains on the currently published version
+until an explicit v0.3.0 release approval is handed to `SCEX-长期维护`.

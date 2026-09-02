@@ -54,6 +54,11 @@ public final class AtomicTradeHandler {
 
     private static void execute(ServerPlayer player, String shop, ConnectorBinding binding,
                                 ShopServerEvent.BuyPre event, MEStorage storage) {
+        execute(player, shop, binding, event, storage, MeCurrency.SCEX_CATALOG);
+    }
+
+    private static void execute(ServerPlayer player, String shop, ConnectorBinding binding,
+                                ShopServerEvent.BuyPre event, MEStorage storage, CurrencyCatalog currencyCatalog) {
         AggregatedResources cost = event.getCostSummary();
         AggregatedResources gain = event.getGainSummary();
         if (!validateShopRules(player, shop, event)) return;
@@ -65,11 +70,6 @@ public final class AtomicTradeHandler {
         int maxGive = Config.maxShopUiGiveItemsPerPurchase.get();
         if (maxGive >= 0 && gain.getTotalItemCount() > maxGive) {
             fail(player, event, Component.translatable("viscript_shop.message.buy.too_many_items", maxGive)); return;
-        }
-        int moneyBefore = ViScriptShopServerUtil.getMoney(player);
-        if (cost.getTotalMoney() > moneyBefore) {
-            fail(player, event, Component.translatable("viscript_shop.message.noEnoughMoney",
-                    cost.getTotalMoney() - moneyBefore)); return;
         }
         if (cost.getTotalXp() > player.totalExperience) {
             fail(player, event, Component.literal("Not enough experience"));
@@ -85,22 +85,43 @@ public final class AtomicTradeHandler {
             fail(player, event, Component.translatable("viscript_shop.message.notEnoughItem",
                     missing.isEmpty() ? "?" : missing.getItem().getDescription().getString())); return;
         }
+        Map<AEItemKey, Long> itemReservations;
+        int moneyBefore = ViScriptShopServerUtil.getMoney(player);
+        MeCurrency.Plan moneyPlan;
+        List<Move> allNetworkDebits;
+        try {
+            itemReservations = movesByKey(paymentPlan.networkDebits());
+            moneyPlan = MeCurrency.plan(storage, cost.getTotalMoney(), moneyBefore,
+                    gain.getTotalMoney(), itemReservations, currencyCatalog);
+            allNetworkDebits = moneyPlan == null ? List.of()
+                    : mergeDebits(paymentPlan.networkDebits(), moneyPlan.debits());
+        } catch (ArithmeticException | IllegalArgumentException invalidMoney) {
+            fail(player, event, "error.rollback");
+            return;
+        }
+        if (moneyPlan == null) {
+            int visibleCoins = MeCurrency.visibleValue(storage, currencyCatalog, itemReservations);
+            int availableMoney = ConnectorInventory.saturatingAdd(moneyBefore, visibleCoins);
+            fail(player, event, Component.translatable("viscript_shop.message.noEnoughMoney",
+                    Math.max(1, cost.getTotalMoney() - availableMoney)));
+            return;
+        }
         List<Move> goods = gain.getItems().entrySet().stream()
                 .map(entry -> new Move(AEItemKey.of(entry.getKey()), entry.getValue())).toList();
         if (goods.stream().anyMatch(move -> move.key() == null)
                 || !canInsert(storage, goods, source)) { fail(player, event, "error.capacity"); return; }
         InventoryPlan inventoryPlan = planInventoryCommit(player.getInventory(), paymentPlan.inventoryDebits());
-        if (!canExtract(storage, paymentPlan.networkDebits(), source) || !canInsert(storage, goods, source)) {
+        if (!canExtract(storage, allNetworkDebits, source) || !canInsert(storage, goods, source)) {
             fail(player, event, "error.offline");
             return;
         }
 
         List<ItemStack> affectedKeys = new ArrayList<>();
         goods.forEach(move -> affectedKeys.add(move.key().getReadOnlyStack()));
-        paymentPlan.networkDebits().forEach(move -> affectedKeys.add(move.key().getReadOnlyStack()));
+        allNetworkDebits.forEach(move -> affectedKeys.add(move.key().getReadOnlyStack()));
         Map<AEItemKey, Long> networkDeltas = new LinkedHashMap<>();
         try {
-            paymentPlan.networkDebits().forEach(move ->
+            allNetworkDebits.forEach(move ->
                     networkDeltas.merge(move.key(), -move.amount(), Math::addExact));
             goods.forEach(move -> networkDeltas.merge(move.key(), move.amount(), Math::addExact));
         } catch (ArithmeticException overflow) {
@@ -110,7 +131,7 @@ public final class AtomicTradeHandler {
         TradeJournal journal;
         try {
             journal = TradeJournal.prepare(player, shop, binding, event, storage, affectedKeys,
-                    inventoryPlan.before(), inventoryPlan.after(), networkDeltas);
+                    inventoryPlan.before(), inventoryPlan.after(), networkDeltas, moneyPlan.moneyAfter());
         } catch (RuntimeException failure) {
             ScexViScriptShopAe2.LOGGER.error("Cannot prepare durable ME transaction player={} shop={}",
                     player.getGameProfile().getName(), shop, failure);
@@ -119,13 +140,12 @@ public final class AtomicTradeHandler {
         }
 
         try {
-            modulateExtract(storage, paymentPlan.networkDebits(), new ArrayList<>(), source);
+            modulateExtract(storage, allNetworkDebits, new ArrayList<>(), source);
             applyInventoryPlan(player.getInventory(), inventoryPlan);
             modulateInsert(storage, goods, new ArrayList<>(), source);
-            if (cost.getTotalMoney() > 0) ViScriptShopServerUtil.removeMoney(player, cost.getTotalMoney());
+            ViScriptShopServerUtil.setMoney(player, moneyPlan.moneyAfter());
             if (cost.getTotalXp() > 0) player.giveExperiencePoints(-cost.getTotalXp());
             reduceStock(player, shop, event);
-            if (gain.getTotalMoney() > 0) ViScriptShopServerUtil.addMoney(player, gain.getTotalMoney());
             if (gain.getTotalXp() > 0) player.giveExperiencePoints(gain.getTotalXp());
             journal.commit(player, storage);
         } catch (RuntimeException failure) {
@@ -212,6 +232,20 @@ public final class AtomicTradeHandler {
                 .map(entry -> new Move(entry.getKey(), entry.getValue())).toList();
         if (!canExtract(storage, networkDebits, source)) return null;
         return new PaymentPlan(networkDebits, List.copyOf(planned.values()));
+    }
+
+    private static Map<AEItemKey, Long> movesByKey(List<Move> moves) {
+        Map<AEItemKey, Long> result = new LinkedHashMap<>();
+        for (Move move : moves) result.merge(move.key(), move.amount(), Math::addExact);
+        return result;
+    }
+
+    private static List<Move> mergeDebits(List<Move> itemDebits, List<MeCurrency.Debit> currencyDebits) {
+        Map<AEItemKey, Long> merged = movesByKey(itemDebits);
+        for (MeCurrency.Debit debit : currencyDebits) {
+            merged.merge(debit.key(), debit.amount(), Math::addExact);
+        }
+        return merged.entrySet().stream().map(entry -> new Move(entry.getKey(), entry.getValue())).toList();
     }
 
     private static InventoryPlan planInventoryCommit(Inventory inventory, List<SlotDebit> debits) {

@@ -6,6 +6,7 @@
 | NeoForge 21.1.248 | verified compile target | metadata range 21.1.248–21.1.x |
 | ViScriptShop 1.2.0 fix1 | required | native UI and server purchase flow retained |
 | AE2 19.2.17 | required | connector block uses the exact public API baseline |
+| SCEX KubeJS currency | integrated | `scex:coin_1/2/3` values 1C/5C/10C match the production money-bag script |
 | JEI 19.44.0.405 | passive compatibility | no JEI hooks changed |
 | FTB Quests 2101.1.34 | passive compatibility | native commands/events run after durable commit |
 | multiplayer | server-authoritative design | server-thread execution plus per-grid monitor lock |
