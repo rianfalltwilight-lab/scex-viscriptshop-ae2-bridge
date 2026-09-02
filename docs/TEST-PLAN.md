@@ -1,4 +1,4 @@
-# Verification plan and v0.3.0 evidence
+# Verification plan and v0.3.1 evidence
 
 Target runtime: Java 21, Minecraft 1.21.1, NeoForge 21.1.248, ViScriptShop 1.2.0 and AE2 19.2.17.
 
@@ -14,6 +14,22 @@ The v0.3.0 currency extension was verified on 2026-09-02:
   passed again in 1.197 s and a previously disconnected restart fixture rejoined the powered grid;
 - external hard-kill/restart matrix: all four required phase outcomes passed;
 - formal JAR audit: connector classes/assets present and all GameTest/probe classes absent.
+
+The v0.3.1 resource refresh replaces the borrowed AE2 interface texture with the three supplied
+pixel assets: a 16x16 opaque base, a 16x192 transparent 12-frame signal layer and a 16x16 composite
+preview. The signal uses a two-tick frame time without interpolation and is rendered on all six
+outer faces using the cutout render type.
+
+The v0.3.1 resource refresh was verified on 2026-09-02:
+
+- the three packaged PNG SHA-256 hashes exactly match the supplied Downloads files;
+- `gradlew runGameTestServer --no-build-cache` passed all 16 required tests in 1.122 s;
+- two independent `gradlew clean build --no-build-cache` runs produced byte-identical main,
+  sources and GameTest-probe JARs;
+- the formal JAR has 79 entries, zero duplicate entries and zero GameTest/probe/fault/sentinel
+  entries, and no longer references `ae2:block/interface`;
+- a deterministic enlarged preview verifies the layer composition and 12-frame animation, while a
+  real Minecraft client visual smoke test remains required before publication.
 
 Release gates:
 
@@ -58,4 +74,4 @@ NeoForge JVM against the same world, verifies recovery, and archives the transac
 Probe classes and fault injection live only in the `gametest` source set and must not ship.
 
 Production under `E:\Minecarft\B-03-SCEX-LegacyGenesis` remains on the currently published version
-until an explicit v0.3.0 release approval is handed to `SCEX-长期维护`.
+until an explicit v0.3.1 release approval is handed to `SCEX-长期维护`.

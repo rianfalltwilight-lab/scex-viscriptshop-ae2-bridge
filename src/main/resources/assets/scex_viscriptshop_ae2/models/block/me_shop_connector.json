@@ -1,6 +1,72 @@
 {
-  "parent": "minecraft:block/cube_all",
+  "parent": "minecraft:block/block",
+  "ambientocclusion": true,
+  "render_type": "cutout",
   "textures": {
-    "all": "ae2:block/interface"
-  }
+    "base": "scex_viscriptshop_ae2:block/me_shop_connector_base",
+    "signal": "scex_viscriptshop_ae2:block/me_shop_connector_signal",
+    "particle": "scex_viscriptshop_ae2:block/me_shop_connector_preview"
+  },
+  "elements": [
+    {
+      "from": [0, 0, 0],
+      "to": [16, 16, 16],
+      "faces": {
+        "down": { "texture": "#base", "cullface": "down" },
+        "up": { "texture": "#base", "cullface": "up" },
+        "north": { "texture": "#base", "cullface": "north" },
+        "south": { "texture": "#base", "cullface": "south" },
+        "west": { "texture": "#base", "cullface": "west" },
+        "east": { "texture": "#base", "cullface": "east" }
+      }
+    },
+    {
+      "from": [0, 0, -0.01],
+      "to": [16, 16, 0],
+      "shade": false,
+      "faces": {
+        "north": { "texture": "#signal", "cullface": "north" }
+      }
+    },
+    {
+      "from": [0, 0, 16],
+      "to": [16, 16, 16.01],
+      "shade": false,
+      "faces": {
+        "south": { "texture": "#signal", "cullface": "south" }
+      }
+    },
+    {
+      "from": [-0.01, 0, 0],
+      "to": [0, 16, 16],
+      "shade": false,
+      "faces": {
+        "west": { "texture": "#signal", "cullface": "west" }
+      }
+    },
+    {
+      "from": [16, 0, 0],
+      "to": [16.01, 16, 16],
+      "shade": false,
+      "faces": {
+        "east": { "texture": "#signal", "cullface": "east" }
+      }
+    },
+    {
+      "from": [0, -0.01, 0],
+      "to": [16, 0, 16],
+      "shade": false,
+      "faces": {
+        "down": { "texture": "#signal", "cullface": "down" }
+      }
+    },
+    {
+      "from": [0, 16, 0],
+      "to": [16, 16.01, 16],
+      "shade": false,
+      "faces": {
+        "up": { "texture": "#signal", "cullface": "up" }
+      }
+    }
+  ]
 }
