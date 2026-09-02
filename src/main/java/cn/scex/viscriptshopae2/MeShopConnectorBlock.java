@@ -13,12 +13,31 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.StateDefinition;
+import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.phys.BlockHitResult;
 
 public final class MeShopConnectorBlock extends AEBaseEntityBlock<MeShopConnectorBlockEntity> {
+    public static final BooleanProperty ACTIVE = BooleanProperty.create("active");
+
     public MeShopConnectorBlock() {
         super(AEBaseBlock.metalProps().strength(3.5F));
+        registerDefaultState(defaultBlockState().setValue(ACTIVE, false));
+    }
+
+    @Override
+    protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
+        super.createBlockStateDefinition(builder);
+        builder.add(ACTIVE);
+    }
+
+    @Override
+    protected BlockState updateBlockStateFromBlockEntity(BlockState state,
+                                                          MeShopConnectorBlockEntity connector) {
+        return super.updateBlockStateFromBlockEntity(state, connector)
+                .setValue(ACTIVE, connector.isVisualActive());
     }
 
     @Override

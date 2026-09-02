@@ -1,4 +1,4 @@
-# Verification plan and v0.3.2 evidence
+# Verification plan and v0.3.3 evidence
 
 Target runtime: Java 21, Minecraft 1.21.1, NeoForge 21.1.248, ViScriptShop 1.2.0 and AE2 19.2.17.
 
@@ -47,6 +47,12 @@ The v0.3.2 candidate was verified on 2026-09-02:
 - the formal JAR has 79 entries, zero duplicates, zero GameTest/probe/fault/sentinel entries, six
   signal faces and the unchanged anti-z-fighting offsets.
 
+The v0.3.3 visual-state update adds an `active` block-state property synchronized from the AE node.
+`active=false` and the item model use only the supplied base texture; `active=true` selects the
+existing six-face animated model. The user explicitly waived another test run for this release; the
+candidate receives a clean assembly and static archive inspection only, and this reduced validation
+must remain visible in the release handoff.
+
 Release gates:
 
 1. `gradlew runGameTestServer --no-build-cache` must pass all 16 required tests with a real AE2
@@ -90,4 +96,5 @@ NeoForge JVM against the same world, verifies recovery, and archives the transac
 Probe classes and fault injection live only in the `gametest` source set and must not ship.
 
 Production under `E:\Minecarft\B-03-SCEX-LegacyGenesis` remains on the currently published version
-until an explicit v0.3.2 release approval is handed to `SCEX-长期维护`.
+The user explicitly approved publishing v0.3.3 together with the supplied updated `new.shop` and
+`shopstage.js`; production execution remains assigned to `SCEX-长期维护`.

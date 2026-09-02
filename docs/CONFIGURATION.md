@@ -1,9 +1,14 @@
 # Connector behavior
 
-There is no server-side shop-to-terminal coordinate configuration in 0.3.2. A player crafts the
+There is no server-side shop-to-terminal coordinate configuration in 0.3.3. A player crafts the
 `ME Shop Connector`, places it as part of their own powered AE2 network, and the placement becomes
 that player's active shop link. Placing another connector replaces the previous link. The link is
 stored in world data and survives restarts.
+
+The connector shows only the supplied opaque base texture while its AE node is inactive, offline or
+waiting for a channel. The colored signal layer appears only when the node is active and online.
+Inventory and held-item rendering use the inactive base appearance because an item has no network
+state.
 
 The connector must be loaded, online, powered, have an AE channel, and retain the placing player's
 AE2 node ownership. It does not open a separate shop screen and is not assigned to a shop ID: it
