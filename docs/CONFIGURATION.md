@@ -1,6 +1,6 @@
 # Connector behavior
 
-There is no server-side shop-to-terminal coordinate configuration in 0.3.1. A player crafts the
+There is no server-side shop-to-terminal coordinate configuration in 0.3.2. A player crafts the
 `ME Shop Connector`, places it as part of their own powered AE2 network, and the placement becomes
 that player's active shop link. Placing another connector replaces the previous link. The link is
 stored in world data and survives restarts.

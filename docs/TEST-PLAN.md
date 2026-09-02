@@ -1,4 +1,4 @@
-# Verification plan and v0.3.1 evidence
+# Verification plan and v0.3.2 evidence
 
 Target runtime: Java 21, Minecraft 1.21.1, NeoForge 21.1.248, ViScriptShop 1.2.0 and AE2 19.2.17.
 
@@ -30,6 +30,22 @@ The v0.3.1 resource refresh was verified on 2026-09-02:
   entries, and no longer references `ae2:block/interface`;
 - a deterministic enlarged preview verifies the layer composition and 12-frame animation, while a
   real Minecraft client visual smoke test remains required before publication.
+
+The v0.3.2 animation tuning changes only the signal metadata: frame time increases from two ticks
+to 20 ticks, making the 12-frame cycle ten times slower (approximately 12 seconds at 20 TPS), and
+per-pixel interpolation is enabled for a softer transition without spatially filtering the pixel
+art. The base, signal and preview PNG bytes and the six-face layered model remain unchanged.
+
+The v0.3.2 candidate was verified on 2026-09-02:
+
+- animation metadata parses as `frametime=20` and `interpolate=true` in the formal JAR;
+- the three PNG hashes and block-model hash are unchanged from v0.3.1;
+- `gradlew runGameTestServer --no-build-cache` loaded the target dependencies and passed all 16
+  required tests in 1.188 s;
+- two independent `gradlew clean build --no-build-cache` runs produced byte-identical main,
+  sources and GameTest-probe JARs;
+- the formal JAR has 79 entries, zero duplicates, zero GameTest/probe/fault/sentinel entries, six
+  signal faces and the unchanged anti-z-fighting offsets.
 
 Release gates:
 
@@ -74,4 +90,4 @@ NeoForge JVM against the same world, verifies recovery, and archives the transac
 Probe classes and fault injection live only in the `gametest` source set and must not ship.
 
 Production under `E:\Minecarft\B-03-SCEX-LegacyGenesis` remains on the currently published version
-until an explicit v0.3.1 release approval is handed to `SCEX-长期维护`.
+until an explicit v0.3.2 release approval is handed to `SCEX-长期维护`.
